@@ -121,26 +121,94 @@ use std::fs::read_to_string;
 // }
 
 pub struct LolcodeCompiler{
+    lexer: LolcodeLexicalAnalyzer,
     current_tok: String, 
 }
 
 pub trait Compiler {
     fn compile(&mut self, source: &str);
 }
+// Lexical analyzer - given by professor
+pub trait  LexicalAnalyzer {
+    fn get_char(&mut self) -> char; 
 
+    fn add_char(&mut self) -> char; 
+} 
+
+pub struct LolcodeLexicalAnalyzer{
+    input: Vec<char>, 
+    position: usize, 
+    current_build: String,
+    tokens: Vec<String>, 
+}
+impl LolcodeLexicalAnalyzer {
+    pub fn new(source: &str) -> Self {
+        Self {
+            input: source.chars().collect(), 
+            position: 0, 
+            current_build: String::new(),
+            tokens: Vec::new(),
+        }
+    }
+
+    pub fn tokenize(&mut self) {
+        loop {
+            let c = self.get_char(); 
+
+            // end of file contents, terminate the loop
+            if c == '\0' {
+                break; 
+            }
+
+            else if c.is_whitespace() {
+                if !self.current_build.is_empty() {
+                    self.tokens.push(std::mem::take(&mut self.current_build));
+            }
+        } else {
+            self.add_char(); 
+        }
+    }
+
+        if !self.current_build.is_empty()
+        {
+            self.tokens.push(std::mem::take(&mut self.current_build)); 
+        }
+
+        self.tokens.reverse();
+
+        println!("{:?}", self.tokens); 
+}
+}
+
+
+impl LexicalAnalyzer for LolcodeLexicalAnalyzer{
+    fn get_char(&mut self) -> char {
+        if self.position >= self.input.len() {
+            return '\0'; 
+        }
+        let c = self.input[self.position]; 
+        self.position += 1; 
+        c
+    }
+
+    fn add_char(&mut self) -> char {
+        let c = self.input[self.position - 1]; 
+        self.current_build.push(c); 
+        c
+    }
+}
 impl LolcodeCompiler {
     pub fn new() -> Self {
         Self {
+            lexer: LolcodeLexicalAnalyzer::new(""),
             current_tok: String::new(), 
         }
     }
 }
 impl Compiler for LolcodeCompiler{
     fn compile(&mut self, source: &str) {
-        for c in source
-.chars() {
-            println!("{}", c); 
-    }
+        self.lexer = LolcodeLexicalAnalyzer::new(source); 
+        self.lexer.tokenize();
 }
 }
 struct Config {
