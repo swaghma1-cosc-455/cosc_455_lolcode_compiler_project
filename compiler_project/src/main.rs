@@ -1107,11 +1107,38 @@ impl LolcodeCompiler {
                         }
                     }
 
+                    if next_token.to_lowercase() == "paragraf" {
+                        html_string.push_str("\n<p>");
+                        while let Some(para_token) = token_strings.pop() {
+                            if para_token.to_lowercase() == "#oic" {
+                                html_string.push_str("</p>\n");
+                                break;
+                            }
+
+                            if para_token.to_lowercase() == "#gimmeh" {
+                                if let Some(para_elem_token) = token_strings.pop() {
+                                    if para_elem_token.to_lowercase() == "newline" {
+                                        html_string.push_str("<br/>\n");
+                                    }
+
+                                }
+                            } else {
+                                html_string.push_str(" ");
+                                html_string.push_str(&para_token);
+                            }
+                    }
+
                 }
+
+                
+
+                    
             }
         }
-        println!("{}", html_string);
     }
+
+     println!("{}", html_string);
+}
 }
 impl Compiler for LolcodeCompiler {
     fn compile(&mut self, source: &str) {
