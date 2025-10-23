@@ -1,12 +1,19 @@
-
 use std::{env, process, vec}; 
 use std::fs::read_to_string; 
 use regex::Regex; 
+use std::collections::HashMap;
 
 pub struct LolcodeCompiler{
     lexer: LolcodeLexicalAnalyzer,
     parser: LolcodeSyntaxAnalyzer, 
-    current_tok: String, 
+    current_tok: String,
+    scope_stack: Vec<HashMap<String, VariableInfo>>}
+
+#[derive(Clone)]
+struct VariableInfo {
+    name: String,
+    value: Option<String>,
+    line_defined: usize,
 }
 
 pub trait Compiler {
@@ -27,7 +34,8 @@ pub struct LolcodeLexicalAnalyzer{
     input: Vec<char>, 
     position: usize, 
     current_build: String,
-    tokens: Vec<String>, 
+    tokens: Vec<(String, usize)>, // Token and line number
+    line_number: usize,
     head_start: Vec<String>,
     head_end: Vec<String>, 
     comment_start: Vec<String>,
@@ -62,6 +70,7 @@ impl LolcodeLexicalAnalyzer {
             position: 0, 
             current_build: String::new(),
             tokens: Vec::new(),
+            line_number: 1,
             head_start: vec!["#hai".into()],
             head_end: vec!["#kthxbye".into()],
             comment_start: vec!["#obtw".into()],
@@ -98,9 +107,14 @@ impl LolcodeLexicalAnalyzer {
                 break; 
             }
 
-            if c.is_whitespace() {
+            if c == '\n' {
                 if !self.current_build.is_empty() {
-                    self.tokens.push(std::mem::take(&mut self.current_build));
+                    self.tokens.push((std::mem::take(&mut self.current_build), self.line_number));
+                }
+                self.line_number += 1;
+            } else if c.is_whitespace() {
+                if !self.current_build.is_empty() {
+                    self.tokens.push((std::mem::take(&mut self.current_build), self.line_number));
                 }
             } else {
                 self.add_char(); 
@@ -108,13 +122,15 @@ impl LolcodeLexicalAnalyzer {
         }
 
         if !self.current_build.is_empty() {
-            self.tokens.push(std::mem::take(&mut self.current_build)); 
+            self.tokens.push((std::mem::take(&mut self.current_build), self.line_number)); 
         }
         
         // Reverse to get first token when popping
         self.tokens.reverse();
+    }
 
-       
+    fn is_variable_identifier(&self, s: &str) -> bool {
+        self.var_def.is_match(s)
     }
 }
 
@@ -182,20 +198,22 @@ pub trait SyntaxAnalyzer {
     fn parse_bold(&mut self, compiler: &mut LolcodeCompiler);           
     fn parse_italics(&mut self, compiler: &mut LolcodeCompiler);
     fn parse_text(&mut self, compiler: &mut LolcodeCompiler);
+    fn parse_variable_declaration(&mut self, compiler: &mut LolcodeCompiler);
+    fn parse_variable_usage(&mut self, compiler: &mut LolcodeCompiler);
 }
 
 pub struct LolcodeSyntaxAnalyzer {
+    current_line: usize,
 }
 
 impl LolcodeSyntaxAnalyzer {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            current_line: 1,
+        }
     }
     
     // Helper methods to check token types using compiler's lexer
-    fn is_document_start(&self, s: &str, lexer: &LolcodeLexicalAnalyzer) -> bool {
-        lexer.head_start.iter().any(|head| head == &s.to_lowercase())
-    }
 
     fn is_document_end(&self, s: &str, lexer: &LolcodeLexicalAnalyzer) -> bool {
         lexer.head_end.iter().any(|head| head == &s.to_lowercase())
@@ -223,6 +241,18 @@ impl LolcodeSyntaxAnalyzer {
 
     fn is_comment_end(&self, s: &str, lexer: &LolcodeLexicalAnalyzer) -> bool {
         lexer.comment_end.iter().any(|comment| comment == &s.to_lowercase())
+    }
+
+    fn is_variable_start(&self, s: &str, lexer: &LolcodeLexicalAnalyzer) -> bool {
+        lexer.variable_start.iter().any(|v| v == &s.to_lowercase())
+    }
+
+    fn is_variable_mid(&self, s: &str, lexer: &LolcodeLexicalAnalyzer) -> bool {
+        lexer.variable_mid.iter().any(|v| v == &s.to_lowercase())
+    }
+
+    fn is_variable_end(&self, s: &str, lexer: &LolcodeLexicalAnalyzer) -> bool {
+        lexer.variable_end.iter().any(|v| v == &s.to_lowercase())
     }
 
     fn is_head_element(&self, s: &str, lexer: &LolcodeLexicalAnalyzer) -> bool {
@@ -273,19 +303,31 @@ impl LolcodeSyntaxAnalyzer {
         lexer.address.is_match(s)
     }
 
-    
+    fn is_variable_identifier(&self, s: &str, lexer: &LolcodeLexicalAnalyzer) -> bool {
+        lexer.is_variable_identifier(s)
+    }
 }
 
 impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
     fn parse_lolcode(&mut self, compiler: &mut LolcodeCompiler) {
-        
         // Optional comment at start
         if self.is_comment_start(&compiler.current_tok, &compiler.lexer) {
             self.parse_comment(compiler);
         }
         
-        // Parse head (required)
+            // Allow variable declarations before head
+        while self.is_variable_start(&compiler.current_tok, &compiler.lexer) {
+            self.parse_variable_declaration(compiler);
+        }
+
+       // Parse head (optional) - only if we see #MAEK followed by HEAD
+    if self.is_make_start(&compiler.current_tok, &compiler.lexer) 
+        && !compiler.lexer.tokens.is_empty() 
+        && self.is_head_element(&compiler.lexer.tokens.last().unwrap().0, &compiler.lexer) {
         self.parse_head(compiler);
+    }
+    
+
         
         // Parse body (required)
         self.parse_body(compiler);
@@ -294,14 +336,16 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
     fn parse_head(&mut self, compiler: &mut LolcodeCompiler) {
         // Expect #MAEK
         if !self.is_make_start(&compiler.current_tok, &compiler.lexer) {
-            eprintln!("Syntax error: Expected '#maek', found '{}'.", compiler.current_tok);
+            eprintln!("Syntax error at line {}: Expected '#maek', found '{}'.", 
+                self.current_line, compiler.current_tok);
             std::process::exit(1);
         }
         compiler.current_tok = compiler.next_token();
         
         // Expect HEAD
         if !self.is_head_element(&compiler.current_tok, &compiler.lexer) {
-            eprintln!("Syntax error: Expected 'head', found '{}'.", compiler.current_tok);
+            eprintln!("Syntax error at line {}: Expected 'head', found '{}'.", 
+                self.current_line, compiler.current_tok);
             std::process::exit(1);
         }
         compiler.current_tok = compiler.next_token();
@@ -311,7 +355,8 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         
         // Expect #OIC
         if !self.is_oic_end(&compiler.current_tok, &compiler.lexer) {
-            eprintln!("Syntax error: Expected '#oic', found '{}'.", compiler.current_tok);
+            eprintln!("Syntax error at line {}: Expected '#oic', found '{}'.", 
+                self.current_line, compiler.current_tok);
             std::process::exit(1);
         }
         compiler.current_tok = compiler.next_token();
@@ -320,14 +365,16 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
     fn parse_title(&mut self, compiler: &mut LolcodeCompiler) {
         // Expect #GIMMEH
         if !self.is_gimmeh_start(&compiler.current_tok, &compiler.lexer) {
-            eprintln!("Syntax error: Expected '#gimmeh', found '{}'.", compiler.current_tok);
+            eprintln!("Syntax error at line {}: Expected '#gimmeh', found '{}'.", 
+                self.current_line, compiler.current_tok);
             std::process::exit(1);
         }
         compiler.current_tok = compiler.next_token();
         
         // Expect TITLE
         if !self.is_title_element(&compiler.current_tok, &compiler.lexer) {
-            eprintln!("Syntax error: Expected 'title', found '{}'.", compiler.current_tok);
+            eprintln!("Syntax error at line {}: Expected 'title', found '{}'.", 
+                self.current_line, compiler.current_tok);
             std::process::exit(1);
         }
         compiler.current_tok = compiler.next_token();
@@ -335,7 +382,8 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         // Consume text until #MKAY
         while !self.is_mkay_end(&compiler.current_tok, &compiler.lexer) {
             if compiler.current_tok.is_empty() {
-                eprintln!("Syntax error: Unexpected end of input in title.");
+                eprintln!("Syntax error at line {}: Unexpected end of input in title.", 
+                    self.current_line);
                 std::process::exit(1);
             }
             self.parse_text(compiler);
@@ -348,7 +396,8 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
     fn parse_comment(&mut self, compiler: &mut LolcodeCompiler) {
         // Expect #OBTW
         if !self.is_comment_start(&compiler.current_tok, &compiler.lexer) {
-            eprintln!("Syntax error: Expected comment start '#obtw', found '{}'.", compiler.current_tok);
+            eprintln!("Syntax error at line {}: Expected comment start '#obtw', found '{}'.", 
+                self.current_line, compiler.current_tok);
             std::process::exit(1);
         }
         compiler.current_tok = compiler.next_token();
@@ -356,7 +405,8 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         // Consume all text until #TLDR
         while !self.is_comment_end(&compiler.current_tok, &compiler.lexer) {
             if compiler.current_tok.is_empty() {
-                eprintln!("Syntax error: Unexpected end of input in comment.");
+                eprintln!("Syntax error at line {}: Unexpected end of input in comment.", 
+                    self.current_line);
                 std::process::exit(1);
             }
             compiler.current_tok = compiler.next_token();
@@ -370,7 +420,8 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         // Parse body elements until we hit #KTHXBYE
         while !self.is_document_end(&compiler.current_tok, &compiler.lexer) {
             if compiler.current_tok.is_empty() {
-                eprintln!("Syntax error: Unexpected end of input in body.");
+                eprintln!("Syntax error at line {}: Unexpected end of input in body.", 
+                    self.current_line);
                 std::process::exit(1);
             }
             
@@ -386,7 +437,8 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
                 } else if self.is_italics_element(&compiler.current_tok, &compiler.lexer) {
                     self.parse_italics(compiler);
                 } else {
-                    eprintln!("Syntax error: Unknown element after '#maek': '{}'.", compiler.current_tok);
+                    eprintln!("Syntax error at line {}: Unknown element after '#maek': '{}'.", 
+                        self.current_line, compiler.current_tok);
                     std::process::exit(1);
                 }
             } else if self.is_gimmeh_start(&compiler.current_tok, &compiler.lexer) {
@@ -399,15 +451,21 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
                 } else if self.is_vidz_element(&compiler.current_tok, &compiler.lexer) {
                     self.parse_video(compiler);
                 } else {
-                    eprintln!("Syntax error: Unknown element after '#gimmeh': '{}'.", compiler.current_tok);
+                    eprintln!("Syntax error at line {}: Unknown element after '#gimmeh': '{}'.", 
+                        self.current_line, compiler.current_tok);
                     std::process::exit(1);
                 }
+            } else if self.is_variable_start(&compiler.current_tok, &compiler.lexer) {
+                self.parse_variable_declaration(compiler);
+            } else if self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
+                self.parse_variable_usage(compiler);
             } else if self.is_comment_start(&compiler.current_tok, &compiler.lexer) {
                 self.parse_comment(compiler);
             } else if self.is_text(&compiler.current_tok, &compiler.lexer) {
                 self.parse_text(compiler);
             } else {
-                eprintln!("Syntax error: Unexpected token in body: '{}'.", compiler.current_tok);
+                eprintln!("Syntax error at line {}: Unexpected token in body: '{}'.", 
+                    self.current_line, compiler.current_tok);
                 std::process::exit(1);
             }
         }
@@ -417,10 +475,14 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         // Already consumed #MAEK PARAGRAF
         compiler.current_tok = compiler.next_token();
         
+        // PUSH NEW SCOPE when entering paragraph
+    compiler.push_scope();
+
         // Parse paragraph content until #OIC
         while !self.is_oic_end(&compiler.current_tok, &compiler.lexer) {
             if compiler.current_tok.is_empty() {
-                eprintln!("Syntax error: Unexpected end of input in paragraph.");
+                eprintln!("Syntax error at line {}: Unexpected end of input in paragraph.", 
+                    self.current_line);
                 std::process::exit(1);
             }
             
@@ -436,7 +498,8 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
                 } else if self.is_bold_element(&compiler.current_tok, &compiler.lexer) {
                     self.parse_bold(compiler);
                 } else {
-                    eprintln!("Syntax error: Unknown element after '#gimmeh': '{}'.", compiler.current_tok);
+                    eprintln!("Syntax error at line {}: Unknown element after '#gimmeh': '{}'.", 
+                        self.current_line, compiler.current_tok);
                     std::process::exit(1);
                 }
             } else if self.is_make_start(&compiler.current_tok, &compiler.lexer) {
@@ -447,19 +510,30 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
                 } else if self.is_bold_element(&compiler.current_tok, &compiler.lexer) {
                     self.parse_bold(compiler);
                 } else {
-                    eprintln!("Syntax error: Unknown element after '#maek': '{}'.", compiler.current_tok);
+                    eprintln!("Syntax error at line {}: Unknown element after '#maek': '{}'.", 
+                        self.current_line, compiler.current_tok);
                     std::process::exit(1);
                 }
+            } else if self.is_variable_start(&compiler.current_tok, &compiler.lexer) {
+                self.parse_variable_declaration(compiler);
+            } else if self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
+                self.parse_variable_usage(compiler);
             } else if self.is_text(&compiler.current_tok, &compiler.lexer) {
                 self.parse_text(compiler);
             } else {
-                eprintln!("Syntax error: Unexpected token in paragraph: '{}'.", compiler.current_tok);
+                eprintln!("Syntax error at line {}: Unexpected token in paragraph: '{}'.", 
+                    self.current_line, compiler.current_tok);
                 std::process::exit(1);
             }
         }
         
         // Consume #OIC
         compiler.current_tok = compiler.next_token();
+
+
+          // POP SCOPE when exiting paragraph
+    compiler.pop_scope();
+    
     }
 
     fn parse_list(&mut self, compiler: &mut LolcodeCompiler) {
@@ -469,7 +543,8 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         // Parse list items until #OIC
         while !self.is_oic_end(&compiler.current_tok, &compiler.lexer) {
             if compiler.current_tok.is_empty() {
-                eprintln!("Syntax error: Unexpected end of input in list.");
+                eprintln!("Syntax error at line {}: Unexpected end of input in list.", 
+                    self.current_line);
                 std::process::exit(1);
             }
             
@@ -479,11 +554,13 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
                 if self.is_item_element(&compiler.current_tok, &compiler.lexer) {
                     self.parse_item(compiler);
                 } else {
-                    eprintln!("Syntax error: Expected 'item' after '#gimmeh', found '{}'.", compiler.current_tok);
+                    eprintln!("Syntax error at line {}: Expected 'item' after '#gimmeh', found '{}'.", 
+                        self.current_line, compiler.current_tok);
                     std::process::exit(1);
                 }
             } else {
-                eprintln!("Syntax error: Expected '#gimmeh item' in list, found '{}'.", compiler.current_tok);
+                eprintln!("Syntax error at line {}: Expected '#gimmeh item' in list, found '{}'.", 
+                    self.current_line, compiler.current_tok);
                 std::process::exit(1);
             }
         }
@@ -499,10 +576,16 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         // Parse item content until #MKAY
         while !self.is_mkay_end(&compiler.current_tok, &compiler.lexer) {
             if compiler.current_tok.is_empty() {
-                eprintln!("Syntax error: Unexpected end of input in list item.");
+                eprintln!("Syntax error at line {}: Unexpected end of input in list item.", 
+                    self.current_line);
                 std::process::exit(1);
             }
-            self.parse_text(compiler);
+            
+            if self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
+                self.parse_variable_usage(compiler);
+            } else {
+                self.parse_text(compiler);
+            }
         }
         
         // Consume #MKAY
@@ -515,14 +598,16 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         
         // Expect address
         if !self.is_address(&compiler.current_tok, &compiler.lexer) {
-            eprintln!("Syntax error: Expected address for audio, found '{}'.", compiler.current_tok);
+            eprintln!("Syntax error at line {}: Expected address for audio, found '{}'.", 
+                self.current_line, compiler.current_tok);
             std::process::exit(1);
         }
         compiler.current_tok = compiler.next_token();
         
         // Expect #MKAY
         if !self.is_mkay_end(&compiler.current_tok, &compiler.lexer) {
-            eprintln!("Syntax error: Expected '#mkay' after audio address, found '{}'.", compiler.current_tok);
+            eprintln!("Syntax error at line {}: Expected '#mkay' after audio address, found '{}'.", 
+                self.current_line, compiler.current_tok);
             std::process::exit(1);
         }
         compiler.current_tok = compiler.next_token();
@@ -534,14 +619,16 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         
         // Expect address
         if !self.is_address(&compiler.current_tok, &compiler.lexer) {
-            eprintln!("Syntax error: Expected address for video, found '{}'.", compiler.current_tok);
+            eprintln!("Syntax error at line {}: Expected address for video, found '{}'.", 
+                self.current_line, compiler.current_tok);
             std::process::exit(1);
         }
         compiler.current_tok = compiler.next_token();
         
         // Expect #MKAY
         if !self.is_mkay_end(&compiler.current_tok, &compiler.lexer) {
-            eprintln!("Syntax error: Expected '#mkay' after video address, found '{}'.", compiler.current_tok);
+            eprintln!("Syntax error at line {}: Expected '#mkay' after video address, found '{}'.", 
+                self.current_line, compiler.current_tok);
             std::process::exit(1);
         }
         compiler.current_tok = compiler.next_token();
@@ -559,10 +646,16 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         // Parse text until #MKAY
         while !self.is_mkay_end(&compiler.current_tok, &compiler.lexer) {
             if compiler.current_tok.is_empty() {
-                eprintln!("Syntax error: Unexpected end of input in bold.");
+                eprintln!("Syntax error at line {}: Unexpected end of input in bold.", 
+                    self.current_line);
                 std::process::exit(1);
             }
-            self.parse_text(compiler);
+            
+            if self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
+                self.parse_variable_usage(compiler);
+            } else {
+                self.parse_text(compiler);
+            }
         }
         
         // Consume #MKAY
@@ -576,10 +669,16 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         // Parse text until #OIC
         while !self.is_oic_end(&compiler.current_tok, &compiler.lexer) {
             if compiler.current_tok.is_empty() {
-                eprintln!("Syntax error: Unexpected end of input in italics.");
+                eprintln!("Syntax error at line {}: Unexpected end of input in italics.", 
+                    self.current_line);
                 std::process::exit(1);
             }
-            self.parse_text(compiler);
+            
+            if self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
+                self.parse_variable_usage(compiler);
+            } else {
+                self.parse_text(compiler);
+            }
         }
         
         // Consume #OIC
@@ -588,19 +687,151 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
 
     fn parse_text(&mut self, compiler: &mut LolcodeCompiler) {
         if !self.is_text(&compiler.current_tok, &compiler.lexer) {
-            eprintln!("Syntax error: Expected text, found '{}'.", compiler.current_tok);
+            eprintln!("Syntax error at line {}: Expected text, found '{}'.", 
+                self.current_line, compiler.current_tok);
             std::process::exit(1);
         }
         compiler.current_tok = compiler.next_token();
     }
-}
+
+    fn parse_variable_declaration(&mut self, compiler: &mut LolcodeCompiler) {
+        // Expect #I HAZ
+        if !self.is_variable_start(&compiler.current_tok, &compiler.lexer) {
+            eprintln!("Syntax error at line {}: Expected '#i' or 'haz', found '{}'.", 
+                self.current_line, compiler.current_tok);
+            std::process::exit(1);
+        }
+        
+        let var_keyword = compiler.current_tok.to_lowercase();
+        compiler.current_tok = compiler.next_token();
+        
+        // If we saw #I, expect HAZ
+        if var_keyword == "#i" {
+            if compiler.current_tok.to_lowercase() != "haz" {
+                eprintln!("Syntax error at line {}: Expected 'haz' after '#i', found '{}'.", 
+                    self.current_line, compiler.current_tok);
+                std::process::exit(1);
+            }
+            compiler.current_tok = compiler.next_token();
+        }
+        
+        // Expect variable identifier
+        if !self.is_variable_identifier(&compiler.current_tok, &compiler.lexer) {
+            eprintln!("Syntax error at line {}: Expected variable identifier, found '{}'.", 
+                self.current_line, compiler.current_tok);
+            std::process::exit(1);
+        }
+        
+        let var_name = compiler.current_tok.clone();
+        compiler.current_tok = compiler.next_token();
+        
+        // Check for #IT IZ (value assignment)
+        let var_value = if self.is_variable_mid(&compiler.current_tok, &compiler.lexer) {
+            let mid_keyword = compiler.current_tok.to_lowercase();
+            compiler.current_tok = compiler.next_token();
+            
+            // If we saw #IT, expect IZ
+            if mid_keyword == "#it" {
+                if compiler.current_tok.to_lowercase() != "iz" {
+                    eprintln!("Syntax error at line {}: Expected 'iz' after '#it', found '{}'.", 
+                        self.current_line, compiler.current_tok);
+                    std::process::exit(1);
+                }
+                compiler.current_tok = compiler.next_token();
+            }
+            
+            // Expect value (text)
+            if !self.is_text(&compiler.current_tok, &compiler.lexer) 
+                && !self.is_address(&compiler.current_tok, &compiler.lexer) {
+                eprintln!("Syntax error at line {}: Expected value after 'iz', found '{}'.", 
+                    self.current_line, compiler.current_tok);
+                std::process::exit(1);
+            }
+            let value = compiler.current_tok.clone();
+            compiler.current_tok = compiler.next_token();
+
+            if !self.is_mkay_end(&compiler.current_tok, &compiler.lexer) 
+            {
+                eprintln!("Syntax error at line {}: Expected '#mkay' after variable value, found '{}'.", 
+                    self.current_line, compiler.current_tok);
+                std::process::exit(1);
+            }
+            //Add statement for mkay
+
+            compiler.current_tok = compiler.next_token();
+
+            Some(value)
+        } else {
+            None
+        };
+        
+            compiler.declare_variable(var_name, var_value, self.current_line);
+
+
+    }
+
+    fn parse_variable_usage(&mut self, compiler: &mut LolcodeCompiler) {
+        // Expect #LEMME SEE
+        if !self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
+            eprintln!("Syntax error at line {}: Expected '#lemme' or 'see', found '{}'.", 
+                self.current_line, compiler.current_tok);
+            std::process::exit(1);
+        }
+        
+        let var_keyword = compiler.current_tok.to_lowercase();
+        compiler.current_tok = compiler.next_token();
+        
+        // If we saw #LEMME, expect SEE
+        if var_keyword == "#lemme" {
+            if compiler.current_tok.to_lowercase() != "see" {
+                eprintln!("Syntax error at line {}: Expected 'see' after '#lemme', found '{}'.", 
+                    self.current_line, compiler.current_tok);
+                std::process::exit(1);
+            }
+            compiler.current_tok = compiler.next_token();
+        }
+        
+        // Expect variable identifier
+        if !self.is_variable_identifier(&compiler.current_tok, &compiler.lexer) {
+            eprintln!("Syntax error at line {}: Expected variable identifier, found '{}'.", 
+                self.current_line, compiler.current_tok);
+            std::process::exit(1);
+        }
+        
+        let var_name = compiler.current_tok.clone();
+          
+    // Check if variable is defined using lookup_variable
+    if compiler.lookup_variable(&var_name).is_none() {
+        eprintln!("Semantic error at line {}: Variable '{}' is used before being defined.", 
+            self.current_line, var_name);
+        eprintln!("  --> Variable '{}' has not been declared in the current scope.", var_name);
+        eprintln!("  --> Use '#I HAZ {}' or 'HAZ {}' to declare the variable before using it.", 
+            var_name, var_name);
+        std::process::exit(1);
+    }
+    
+    compiler.current_tok = compiler.next_token();
+     
+         
+    if !self.is_mkay_end(&compiler.current_tok, &compiler.lexer) {
+        eprintln!("Syntax error at line {}: Expected '#mkay' after variable usage, found '{}'.", 
+            self.current_line, compiler.current_tok);
+        std::process::exit(1);
+    }
+        compiler.current_tok = compiler.next_token();
+    }
+
+
+    }
+
 
 impl LolcodeCompiler {
     pub fn new() -> Self {
         Self {
             lexer: LolcodeLexicalAnalyzer::new(""),
             parser: LolcodeSyntaxAnalyzer::new(),
-            current_tok: String::new(), 
+            current_tok: String::new(),
+            scope_stack: vec![HashMap::new()],
         }
     }
 
@@ -617,24 +848,69 @@ impl LolcodeCompiler {
     fn lolcode(&mut self) {
         // Document should start with #HAI
         if !self.lexer.head_start.iter().any(|h| h == &self.current_tok.to_lowercase()) {
-            eprintln!("Syntax error: Expected document start '#hai', found '{}'.", self.current_tok);
+            eprintln!("Syntax error at line {}: Expected document start '#hai', found '{}'.", 
+                self.parser.current_line, self.current_tok);
             std::process::exit(1);
         }
         
         self.current_tok = self.next_token();
         
         // Parse the document structure
-        // Need to temporarily move parser out to avoid borrow conflict
         let mut parser = std::mem::replace(&mut self.parser, LolcodeSyntaxAnalyzer::new());
         parser.parse_lolcode(self);
         self.parser = parser;
         
         // Document should end with #KTHXBYE
         if !self.lexer.head_end.iter().any(|h| h == &self.current_tok.to_lowercase()) {
-            eprintln!("Syntax error: Expected document end '#kthxbye', found '{}'.", self.current_tok);
+            eprintln!("Syntax error at line {}: Expected document end '#kthxbye', found '{}'.", 
+                self.parser.current_line, self.current_tok);
             std::process::exit(1);
         }
     }
+
+     fn push_scope(&mut self) {
+        self.scope_stack.push(HashMap::new());
+    }
+
+    fn pop_scope(&mut self) {
+        if self.scope_stack.len() > 1 {
+            self.scope_stack.pop();
+        }
+    }
+
+    fn declare_variable(&mut self, name: String, value: Option<String>, line: usize) {
+        // Only check for redeclaration in the CURRENT scope
+        if let Some(current_scope) = self.scope_stack.last_mut() {
+            if current_scope.contains_key(&name) {
+                let existing = &current_scope[&name];
+                eprintln!("Semantic error at line {}: Variable '{}' is already defined at line {} in the current scope.", 
+                    line, name, existing.line_defined);
+                std::process::exit(1);
+            }
+            
+            current_scope.insert(name.clone(), VariableInfo {
+                name,
+                value,
+                line_defined: line,
+            });
+        }
+    }
+
+    fn lookup_variable(&self, name: &str) -> Option<&VariableInfo> {
+        // Search from innermost to outermost scope
+        for scope in self.scope_stack.iter().rev() {
+            if let Some(var_info) = scope.get(name) {
+                return Some(var_info);
+            }
+        }
+        None
+    }
+
+    fn to_html(&self) {
+    // HTML code conversion 
+        let tokens = &self.lexer.tokens; 
+        println!("{:?}", tokens); 
+    }   
 }
 
 impl Compiler for LolcodeCompiler {
@@ -645,16 +921,22 @@ impl Compiler for LolcodeCompiler {
     }
 
     fn next_token(&mut self) -> String {
-       let candidate= self.lexer.tokens.pop().unwrap_or_default(); 
-       if self.lexer.lookup(&candidate) {
-            self.current_tok = candidate.clone();
-            candidate
-        } else if self.lexer.tokens.is_empty() {
+        let result = self.lexer.tokens.pop();
+        
+        if let Some((candidate, line)) = result {
+            self.parser.current_line = line;
+            
+            if self.lexer.lookup(&candidate) {
+                self.current_tok = candidate.clone();
+                candidate
+            } else {
+                eprintln!("Lexical error at line {}: '{}' is not a recognized token.", 
+                    line, candidate);
+                std::process::exit(1);
+            }
+        } else {
             self.current_tok.clear();
             String::new()
-        } else {
-            eprintln!("Lexical error: '{}' is not a recognized token.", candidate);
-            std::process::exit(1);
         }
     }
 
@@ -662,7 +944,8 @@ impl Compiler for LolcodeCompiler {
         self.lolcode();
         
         if !self.lexer.tokens.is_empty() {
-            eprintln!("Syntax error: Additional tokens found after the document.");
+            eprintln!("Syntax error at line {}: Additional tokens found after the document.", 
+                self.parser.current_line);
             std::process::exit(1);
         }
     }
@@ -711,6 +994,7 @@ fn main() {
     let mut compiler = LolcodeCompiler::new(); 
     compiler.compile(&lolcode_string);
     compiler.parse();
-    
+    compiler.to_html(); 
     println!("This lolcode script is syntactically valid.");
+    println!("Static semantic analysis passed: All variables are properly defined before use.");
 }
