@@ -7,7 +7,9 @@ pub struct LolcodeCompiler{
     lexer: LolcodeLexicalAnalyzer,
     parser: LolcodeSyntaxAnalyzer, 
     current_tok: String,
-    scope_stack: Vec<HashMap<String, VariableInfo>>}
+    scope_stack: Vec<HashMap<String, VariableInfo>>,
+    language_tokens: Vec<(String, usize)>
+    }
 
 #[derive(Clone)]
 struct VariableInfo {
@@ -99,7 +101,7 @@ impl LolcodeLexicalAnalyzer {
         }
     }
 
-    pub fn tokenize(&mut self) {
+    pub fn tokenize(&mut self)  {
         loop {
             let c = self.get_char(); 
 
@@ -126,9 +128,12 @@ impl LolcodeLexicalAnalyzer {
         }
         
         // Reverse to get first token when popping
-        self.tokens.reverse();
+       self.tokens.reverse();
     }
 
+    pub fn return_tokens(&mut self) {
+        self.tokens.clone(); 
+    }
     fn is_variable_identifier(&self, s: &str) -> bool {
         self.var_def.is_match(s)
     }
@@ -832,6 +837,7 @@ impl LolcodeCompiler {
             parser: LolcodeSyntaxAnalyzer::new(),
             current_tok: String::new(),
             scope_stack: vec![HashMap::new()],
+            language_tokens: vec![]
         }
     }
 
@@ -906,9 +912,9 @@ impl LolcodeCompiler {
         None
     }
 
-    fn to_html(&self) {
+    fn to_html(&mut self) {
     // HTML code conversion 
-        let tokens = &self.lexer.tokens; 
+        let tokens = &self.language_tokens; 
         println!("{:?}", tokens); 
     }   
 }
@@ -917,6 +923,7 @@ impl Compiler for LolcodeCompiler {
     fn compile(&mut self, source: &str) {
         self.lexer = LolcodeLexicalAnalyzer::new(source);
         self.lexer.tokenize();
+        self.language_tokens = self.lexer.tokens.clone();
         self.start();
     }
 
