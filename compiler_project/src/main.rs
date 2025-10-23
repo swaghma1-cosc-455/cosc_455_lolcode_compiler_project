@@ -500,10 +500,6 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
                     self.parse_paragraph(compiler);
                 } else if self.is_list_element(&compiler.current_tok, &compiler.lexer) {
                     self.parse_list(compiler);
-                } else if self.is_bold_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_bold(compiler);
-                } else if self.is_italics_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_italics(compiler);
                 } else {
                     eprintln!(
                         "Syntax error at line {}: Unknown element after '#maek': '{}'.",
@@ -516,6 +512,11 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
 
                 if self.is_newline_element(&compiler.current_tok, &compiler.lexer) {
                     self.parse_newline(compiler);
+                } 
+                else if self.is_bold_element(&compiler.current_tok, &compiler.lexer) {
+                    self.parse_bold(compiler);
+                } else if self.is_italics_element(&compiler.current_tok, &compiler.lexer) {
+                    self.parse_italics(compiler);
                 } else if self.is_soundz_element(&compiler.current_tok, &compiler.lexer) {
                     self.parse_audio(compiler);
                 } else if self.is_vidz_element(&compiler.current_tok, &compiler.lexer) {
@@ -573,7 +574,10 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
                     self.parse_video(compiler);
                 } else if self.is_bold_element(&compiler.current_tok, &compiler.lexer) {
                     self.parse_bold(compiler);
-                } else {
+                }else if self.is_italics_element(&compiler.current_tok, &compiler.lexer) {
+                    self.parse_italics(compiler);
+                } 
+                else {
                     eprintln!(
                         "Syntax error at line {}: Unknown element after '#gimmeh': '{}'.",
                         self.current_line, compiler.current_tok
@@ -585,8 +589,6 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
 
                 if self.is_list_element(&compiler.current_tok, &compiler.lexer) {
                     self.parse_list(compiler);
-                } else if self.is_bold_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_bold(compiler);
                 } else {
                     eprintln!(
                         "Syntax error at line {}: Unknown element after '#maek': '{}'.",
@@ -736,7 +738,7 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
     }
 
     fn parse_bold(&mut self, compiler: &mut LolcodeCompiler) {
-        // Already consumed #GIMMEH BOLD or #MAEK BOLD (check context)
+        // Already consumed #GIMMEH BOLD
         compiler.current_tok = compiler.next_token();
 
         // Parse text until #MKAY
@@ -765,7 +767,7 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         compiler.current_tok = compiler.next_token();
 
         // Parse text until #OIC
-        while !self.is_oic_end(&compiler.current_tok, &compiler.lexer) {
+        while !self.is_mkay_end(&compiler.current_tok, &compiler.lexer) {
             if compiler.current_tok.is_empty() {
                 eprintln!(
                     "Syntax error at line {}: Unexpected end of input in italics.",
@@ -1118,28 +1120,62 @@ impl LolcodeCompiler {
                             if para_token.to_lowercase() == "#gimmeh" {
                                 if let Some(para_elem_token) = token_strings.pop() {
                                     if para_elem_token.to_lowercase() == "newline" {
-                                        html_string.push_str("<br/>\n");
+                                        html_string.push_str("\n<br/>\n");
+                                    }
+                                    
+                                    if para_elem_token.to_lowercase() == "bold" {
+                                        html_string.push_str(" <b>");
+                                        while let Some(bold_token) = token_strings.pop() {
+                                            if bold_token.to_lowercase() == "#mkay" {
+                                                html_string.push_str(" </b>");
+                                                break;
+                                            }
+                                            html_string.push_str(" ");
+                                            html_string.push_str(&bold_token);
+                                        }
                                     }
 
+                                    if para_elem_token.to_lowercase() == "italics" {
+                                        html_string.push_str(" <i>");
+                                        while let Some(bold_token) = token_strings.pop() {
+                                            if bold_token.to_lowercase() == "#mkay" {
+                                                html_string.push_str(" </i>");
+                                                break;
+                                            }
+                                            html_string.push_str(" ");
+                                            html_string.push_str(&bold_token);
+                                        }
+                                    }
+
+                                    
+
+
                                 }
+
                             } else {
                                 html_string.push_str(" ");
                                 html_string.push_str(&para_token);
                             }
+
+                        
                     }
 
                 }
 
-                
+                       
+                }
 
                     
             }
         }
+
+             println!("{}", html_string);
+
     }
 
-     println!("{}", html_string);
 }
-}
+
+
 impl Compiler for LolcodeCompiler {
     fn compile(&mut self, source: &str) {
         self.lexer = LolcodeLexicalAnalyzer::new(source);
