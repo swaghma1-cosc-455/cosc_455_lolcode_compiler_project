@@ -1,6 +1,6 @@
 use regex::Regex;
 use std::collections::HashMap;
-use std::fs::read_to_string;
+use std::fs::{File, read_to_string};
 use std::{env, process, vec};
 
 pub struct LolcodeCompiler {
@@ -1051,7 +1051,10 @@ impl LolcodeCompiler {
         None
     }
 
-    fn to_html(&mut self) {
+    fn to_html(&mut self) -> String{
+
+
+
         // HTML code conversion
         let tokens = &self.language_tokens;
         let mut token_strings: Vec<String> =
@@ -1117,12 +1120,84 @@ impl LolcodeCompiler {
                                 break;
                             }
 
+                            if para_token.to_lowercase() == "#maek" {
+                                if let Some(list_token) = token_strings.pop() {
+                                    if list_token.to_lowercase() == "list" {
+                                        html_string.push_str("\n<ul>");
+                                        while let Some(list_elem_token) = token_strings.pop() {
+                                            if list_elem_token.to_lowercase() == "#oic" {
+                                                html_string.push_str("\n</ul>\n");
+                                                break;
+                                            }
+
+                                            if list_elem_token.to_lowercase() == "#gimmeh" {
+                                                if let Some(item_token) = token_strings.pop() {
+                                                    if item_token.to_lowercase() == "item" {
+                                                        html_string.push_str("\n<li>");
+                                                        while let Some(item_content_token) =
+                                                                token_strings.pop()
+                                                        {
+                                                            if item_content_token
+                                                                .to_lowercase()
+                                                                == "#mkay"
+                                                            {
+                                                                html_string.push_str(
+                                                                    "</li>\n",
+                                                                );
+                                                                break;
+                                                            }
+                                                            html_string.push_str(" ");
+                                                            html_string.push_str(
+                                                                &item_content_token,
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             if para_token.to_lowercase() == "#gimmeh" {
                                 if let Some(para_elem_token) = token_strings.pop() {
                                     if para_elem_token.to_lowercase() == "newline" {
                                         html_string.push_str("\n<br/>\n");
                                     }
+
+                                    if para_elem_token.to_lowercase() == "soundz" {
+                                        if let Some(address_token) = token_strings.pop() {
+                                            html_string.push_str(&format!(
+                                                "\n<audio controls>\n<source src=\"{}\" type=\"audio/mpeg\">",
+                                                address_token
+                                            ));
+                                        }
+
+                                        if let  Some(address_token) = token_strings.pop() {
+                                            if address_token.to_lowercase() == "#mkay" {
+                                                html_string.push_str("</audio>\n");
+                                            }
+                            
+                                        } 
+                                    }
+    
                                     
+                                    if para_elem_token.to_lowercase() == "vidz" 
+                                    {
+                                        if let Some(address_token) = token_strings.pop() {
+                                            html_string.push_str(&format!(
+                                                "\n<iframe src = {}>\n",
+                                                address_token
+                                            ));
+                                        }
+
+                                        if let  Some(address_token) = token_strings.pop() {
+                                            if address_token.to_lowercase() == "#mkay" {
+                                                continue;
+                                            }
+                            
+                                        }
+                                    }
                                     if para_elem_token.to_lowercase() == "bold" {
                                         html_string.push_str(" <b>");
                                         while let Some(bold_token) = token_strings.pop() {
@@ -1147,12 +1222,11 @@ impl LolcodeCompiler {
                                         }
                                     }
 
-                                    
 
 
                                 }
 
-                            } else {
+                            } else if para_token.to_lowercase() != "#maek" {
                                 html_string.push_str(" ");
                                 html_string.push_str(&para_token);
                             }
@@ -1169,7 +1243,7 @@ impl LolcodeCompiler {
             }
         }
 
-             println!("{}", html_string);
+             html_string
 
     }
 
@@ -1262,7 +1336,14 @@ fn main() {
     let mut compiler = LolcodeCompiler::new();
     compiler.compile(&lolcode_string);
     compiler.parse();
-    compiler.to_html();
+
+    let mut file = File::create("index.html"); 
+
+    let html_string: String = compiler.to_html();
+
+    std::fs::write("index.html", html_string).expect("Unable to write file"); 
+
+    
     println!("This lolcode script is syntactically valid.");
     println!("Static semantic analysis passed: All variables are properly defined before use.");
 }
