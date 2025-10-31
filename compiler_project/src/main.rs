@@ -1,7 +1,7 @@
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs::{File, read_to_string};
-use std::{env, process, vec};
+use std::{env, process, vec, io};
 
 pub struct LolcodeCompiler {
     lexer: LolcodeLexicalAnalyzer,
@@ -1053,7 +1053,7 @@ impl LolcodeCompiler {
 
     fn to_html(&mut self) -> String{
 
-
+        let mut scope_stack: Vec<VariableInfo> = Vec::new(); 
 
         // HTML code conversion
         let tokens = &self.language_tokens;
@@ -1065,6 +1065,53 @@ impl LolcodeCompiler {
         while let Some(token) = token_strings.pop() {
             if token.to_lowercase() == "#hai" {
                 html_string.push_str("<!DOCTYPE html> \n<html>");
+                continue;
+
+                
+            }
+
+            if token.to_lowercase() == "#i" {
+                if let Some(token) = token_strings.pop()  {
+                    if token.to_lowercase() == "haz"
+                    {
+                        if let Some(next_token) = token_strings.pop()
+                        {
+                            let var_name = next_token; 
+
+                            if let Some(next_token) = token_strings.pop()
+                            {
+                                if next_token.to_lowercase() == "#it"
+                                {
+                                    if let Some(next_token_iz) = token_strings.pop()
+                                    {
+                                        if next_token_iz.to_lowercase() == "iz"
+                                        {
+                                            if let Some(value_token) = token_strings.pop()
+                                            {
+                                                let var_value = value_token; 
+
+                                                if let Some(mkay_value) = token_strings.pop()
+                                                {
+                                                    if mkay_value.to_lowercase() == "#mkay"
+                                                    {
+                                                        //Declare stack
+                                                        let variable_info = VariableInfo {
+                                                            name: var_name,
+                                                            value: Some(var_value),
+                                                            line_defined: 0,
+                                                        };
+
+                                                        scope_stack.push(variable_info);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             if token.to_lowercase() == "#kthxbye" {
@@ -1117,9 +1164,77 @@ impl LolcodeCompiler {
                         while let Some(para_token) = token_strings.pop() {
                             if para_token.to_lowercase() == "#oic" {
                                 html_string.push_str("</p>\n");
+                            if scope_stack.len() > 1
+                            {
+                                scope_stack.pop();
+                            }
                                 break;
                             }
 
+                             if para_token.to_lowercase() == "#i" {
+                if let Some(token) = token_strings.pop()  {
+                    if token.to_lowercase() == "haz"
+                    {
+                        if let Some(next_token) = token_strings.pop()
+                        {
+                            let var_name = next_token; 
+
+                            if let Some(next_token) = token_strings.pop()
+                            {
+                                if next_token.to_lowercase() == "#it"
+                                {
+                                    if let Some(next_token_iz) = token_strings.pop()
+                                    {
+                                        if next_token_iz.to_lowercase() == "iz"
+                                        {
+                                            if let Some(value_token) = token_strings.pop()
+                                            {
+                                                let var_value = value_token; 
+
+                                                if let Some(mkay_value) = token_strings.pop()
+                                                {
+                                                    if mkay_value.to_lowercase() == "#mkay"
+                                                    {
+                                                        //Declare stack
+                                                        let variable_info = VariableInfo {
+                                                            name: var_name,
+                                                            value: Some(var_value),
+                                                            line_defined: 0,
+                                                        };
+
+                                                        scope_stack.push(variable_info);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+                if para_token.to_lowercase() == "#lemme"
+                                            {
+                                                if let Some(variable_lemme) = token_strings.pop()
+                                                {
+                                                    if variable_lemme.to_lowercase() == "see"
+                                                    {
+                                                        if let Some(variable_name) = token_strings.pop()
+                                                        {
+                                                            let variable = scope_stack.last().unwrap(); 
+
+                                                            let value = variable.value.clone(); 
+                                                            html_string.push_str(" ");
+                                                            html_string.push_str(&value.unwrap());
+                                                        }
+                                                        
+                                                    }
+
+                                                    continue;
+                                                }
+                                            }
                             if para_token.to_lowercase() == "#maek" {
                                 if let Some(list_token) = token_strings.pop() {
                                     if list_token.to_lowercase() == "list" {
@@ -1136,7 +1251,30 @@ impl LolcodeCompiler {
                                                         html_string.push_str("\n<li>");
                                                         while let Some(item_content_token) =
                                                                 token_strings.pop()
+                                                                
                                                         {
+
+                                                            if item_content_token.to_lowercase() == "#lemme"
+                                            {
+                                                if let Some(variable_lemme) = token_strings.pop()
+                                                {
+                                                    if variable_lemme.to_lowercase() == "see"
+                                                    {
+                                                        if let Some(variable_name) = token_strings.pop()
+                                                        {
+                                                            let variable = scope_stack.last().unwrap(); 
+
+                                                            let value = variable.value.clone(); 
+                                                            html_string.push_str(" ");
+                                                            html_string.push_str(&value.unwrap());
+                                                        }
+                                                        
+                                                    }
+
+                                                    continue;
+                                                }
+                                            }
+
                                                             if item_content_token
                                                                 .to_lowercase()
                                                                 == "#mkay"
@@ -1201,6 +1339,27 @@ impl LolcodeCompiler {
                                     if para_elem_token.to_lowercase() == "bold" {
                                         html_string.push_str(" <b>");
                                         while let Some(bold_token) = token_strings.pop() {
+                                            if bold_token.to_lowercase() == "#lemme"
+                                            {
+                                                if let Some(variable_lemme) = token_strings.pop()
+                                                {
+                                                    if variable_lemme.to_lowercase() == "see"
+                                                    {
+                                                        if let Some(variable_name) = token_strings.pop()
+                                                        {
+                                                            let variable = scope_stack.last().unwrap(); 
+
+                                                            let value = variable.value.clone(); 
+                                                            html_string.push_str(" ");
+                                                            html_string.push_str(&value.unwrap());
+                                                        }
+                                                        
+                                                    }
+
+                                                    continue;
+                                                }
+                                            }
+
                                             if bold_token.to_lowercase() == "#mkay" {
                                                 html_string.push_str(" </b>");
                                                 break;
@@ -1226,7 +1385,7 @@ impl LolcodeCompiler {
 
                                 }
 
-                            } else if para_token.to_lowercase() != "#maek" {
+                            } else if !para_token.starts_with("#") {
                                 html_string.push_str(" ");
                                 html_string.push_str(&para_token);
                             }
@@ -1240,6 +1399,37 @@ impl LolcodeCompiler {
                 }
 
                     
+            }
+
+            else  {
+                if token.to_lowercase() == "#lemme"
+                                            {
+                                                if let Some(variable_lemme) = token_strings.pop()
+                                                {
+                                                    if variable_lemme.to_lowercase() == "see"
+                                                    {
+                                                        if let Some(variable_name) = token_strings.pop()
+                                                        {
+                                                            let variable = scope_stack.last().unwrap(); 
+
+                                                            let value = variable.value.clone(); 
+                                                            html_string.push_str(" ");
+                                                            html_string.push_str(&value.unwrap());
+                                                        }
+                                                        
+                                                    }
+
+                                                    continue;
+                                                }
+                                            }
+                else if !token.starts_with("#")
+                {
+                    html_string.push_str(" ");
+                    html_string.push_str(&token);                }
+                else  {
+                   continue;
+                }
+
             }
         }
 
