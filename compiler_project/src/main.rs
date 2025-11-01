@@ -1551,6 +1551,28 @@ fn main() {
         process::exit(1);
     });
 
+    // Validate .lol extension
+let file_path = Path::new(&config.file_path);
+match file_path.extension().and_then(|ext| ext.to_str()) {
+    Some("lol") => {
+        //Continue
+    }
+    Some(other) => {
+        println!("Error: Invalid file extension '.{}'. Only .lol files are accepted.", other);
+        process::exit(1);
+    }
+    None => {
+        println!("Error: No file extension found. Only .lol files are accepted.");
+        process::exit(1);
+    }
+}
+
+let html_filename = file_path
+.file_stem()
+.and_then(|name| name.to_str())
+.map(|name| format!("{}.html", name))
+.unwrap_or_else(|| "output.html".to_string()); 
+
     let lolcode_string: String;
     match read_to_string(config.file_path) {
         Ok(contents) => lolcode_string = contents,
@@ -1564,14 +1586,13 @@ fn main() {
     compiler.compile(&lolcode_string);
     compiler.parse();
 
-    let mut file = File::create("index.html"); 
 
     let html_string: String = compiler.to_html();
 
 
-    std::fs::write("index.html", html_string).expect("Unable to write file"); 
+    std::fs::write(&html_filename, html_string).expect("Unable to write file"); 
 
-    open_html_in_chrome("../compiler_project/index.html"); 
+    open_html_in_chrome(&html_filename); 
     
     println!("This lolcode script is syntactically valid.");
     println!("Static semantic analysis passed: All variables are properly defined before use.");
