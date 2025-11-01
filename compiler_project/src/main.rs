@@ -2,6 +2,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::fs::{File, read_to_string};
 use std::{env, process, vec, io};
+use std::{fs, path::Path, process::Command};
 
 pub struct LolcodeCompiler {
     lexer: LolcodeLexicalAnalyzer,
@@ -1061,7 +1062,6 @@ impl LolcodeCompiler {
             tokens.iter().map(|(token, _line)| token.clone()).collect();
 
         let mut html_string: String = " ".to_string();
-        println!("{:?}", token_strings);
         while let Some(token) = token_strings.pop() {
             if token.to_lowercase() == "#hai" {
                 html_string.push_str("<!DOCTYPE html> \n<html>");
@@ -1507,6 +1507,43 @@ impl Config {
     }
 }
 
+pub fn open_html_in_chrome<P: AsRef<Path>>(html_file: P) -> io::Result<()> {
+    let p = html_file.as_ref();
+    
+    if !p.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("File not found: {}", p.display()),
+        ));
+    }
+    
+    let abs = fs::canonicalize(p)?;
+    
+    // Handle potential non-UTF8 paths gracefully
+    let path_str = abs.to_str().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "Path contains invalid UTF-8")
+    })?;
+    
+    let clean_path = path_str.strip_prefix(r"\\?\").unwrap_or(path_str);
+    
+    // Convert to file:// URL
+    let file_url = format!("file:///{}", clean_path.replace('\\', "/"));
+    
+    println!("Opening in Chrome: {}", file_url);
+    
+    let status = Command::new("cmd")
+        .args(&["/C", "start", "chrome", &file_url])
+        .status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Chrome exited with status: {}", status),
+        ))
+    }
+}
 fn main() {
     let args: Vec<String> = env::args().collect();
     let config = Config::build(&args).unwrap_or_else(|err| {
@@ -1531,8 +1568,10 @@ fn main() {
 
     let html_string: String = compiler.to_html();
 
+
     std::fs::write("index.html", html_string).expect("Unable to write file"); 
 
+    open_html_in_chrome("../compiler_project/index.html"); 
     
     println!("This lolcode script is syntactically valid.");
     println!("Static semantic analysis passed: All variables are properly defined before use.");
