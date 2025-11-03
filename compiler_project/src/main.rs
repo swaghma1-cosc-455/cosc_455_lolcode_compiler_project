@@ -4,6 +4,12 @@ use std::fs::{File, read_to_string};
 use std::{env, process, vec, io};
 use std::{fs, path::Path, process::Command};
 
+
+#[cfg(windows)]
+use winreg::enums::*;
+#[cfg(windows)]
+use winreg::RegKey;
+
 pub struct LolcodeCompiler {
     lexer: LolcodeLexicalAnalyzer,
     parser: LolcodeSyntaxAnalyzer,
@@ -133,6 +139,7 @@ impl LolcodeLexicalAnalyzer {
 
         // Reverse to get first token when popping
         self.tokens.reverse();
+        println!("{:?}", self.tokens); 
     }
 
     pub fn return_tokens(&mut self) {
@@ -199,10 +206,16 @@ pub trait SyntaxAnalyzer {
     fn parse_lolcode(&mut self, compiler: &mut LolcodeCompiler);
     fn parse_head(&mut self, compiler: &mut LolcodeCompiler);
     fn parse_title(&mut self, compiler: &mut LolcodeCompiler);
+    fn parse_comments(&mut self, compiler: &mut LolcodeCompiler); 
     fn parse_comment(&mut self, compiler: &mut LolcodeCompiler);
     fn parse_body(&mut self, compiler: &mut LolcodeCompiler);
+    fn parse_inner_body(&mut self, compiler: &mut LolcodeCompiler);
     fn parse_paragraph(&mut self, compiler: &mut LolcodeCompiler);
+    fn parse_inner_paragraph(&mut self, compiler: &mut LolcodeCompiler);
     fn parse_list(&mut self, compiler: &mut LolcodeCompiler);
+    fn parse_list_items(&mut self, compiler: &mut LolcodeCompiler);
+    fn parse_inner_list(&mut self, compiler: &mut LolcodeCompiler);
+
     fn parse_item(&mut self, compiler: &mut LolcodeCompiler);
     fn parse_audio(&mut self, compiler: &mut LolcodeCompiler);
     fn parse_video(&mut self, compiler: &mut LolcodeCompiler);
@@ -210,8 +223,9 @@ pub trait SyntaxAnalyzer {
     fn parse_bold(&mut self, compiler: &mut LolcodeCompiler);
     fn parse_italics(&mut self, compiler: &mut LolcodeCompiler);
     fn parse_text(&mut self, compiler: &mut LolcodeCompiler);
-    fn parse_variable_declaration(&mut self, compiler: &mut LolcodeCompiler);
-    fn parse_variable_usage(&mut self, compiler: &mut LolcodeCompiler);
+    fn parse_inner_text(&mut self, compiler: &mut LolcodeCompiler);
+    fn parse_variable_define(&mut self, compiler: &mut LolcodeCompiler);
+    fn parse_variable_use(&mut self, compiler: &mut LolcodeCompiler);
 }
 
 pub struct LolcodeSyntaxAnalyzer {
@@ -223,7 +237,7 @@ impl LolcodeSyntaxAnalyzer {
         Self { current_line: 1 }
     }
 
-    // Helper methods to check token types using compiler's lexer
+    /// Helper methods to check token types using compiler's lexer
 
     fn is_document_end(&self, s: &str, lexer: &LolcodeLexicalAnalyzer) -> bool {
         lexer.head_end.iter().any(|head| head == &s.to_lowercase())
@@ -358,35 +372,41 @@ impl LolcodeSyntaxAnalyzer {
     fn is_variable_identifier(&self, s: &str, lexer: &LolcodeLexicalAnalyzer) -> bool {
         lexer.is_variable_identifier(s)
     }
+
+  
 }
 
 impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
+    // Parse the #HAI tag at the start of document, report a syntax error if it is missing
     fn parse_lolcode(&mut self, compiler: &mut LolcodeCompiler) {
-        // Optional comment at start
-        if self.is_comment_start(&compiler.current_tok, &compiler.lexer) {
-            self.parse_comment(compiler);
-        }
+        
+            self.parse_comments(compiler);
+    
 
         // Allow variable declarations before head
         while self.is_variable_start(&compiler.current_tok, &compiler.lexer) {
-            self.parse_variable_declaration(compiler);
+            self.parse_variable_define(compiler);
         }
 
-        // Parse head (optional) - only if we see #MAEK followed by HEAD
-        if self.is_make_start(&compiler.current_tok, &compiler.lexer)
-            && !compiler.lexer.tokens.is_empty()
-            && self.is_head_element(&compiler.lexer.tokens.last().unwrap().0, &compiler.lexer)
-        {
-            self.parse_head(compiler);
-        }
-
+        self.parse_head(compiler);
+        
         // Parse body (required)
         self.parse_body(compiler);
+    
+}
+
+    fn parse_comments(&mut self, compiler: &mut LolcodeCompiler) {
+        while self.is_comment_start(&compiler.current_tok, &compiler.lexer)
+        {
+            self.parse_comment(compiler);
+        }
+
+        compiler.current_tok = compiler.next_token();
     }
 
     fn parse_head(&mut self, compiler: &mut LolcodeCompiler) {
         // Expect #MAEK
-        if !self.is_make_start(&compiler.current_tok, &compiler.lexer) {
+        if !self.is_make_start(&compiler.current_tok, &compiler.lexer){
             eprintln!(
                 "Syntax error at line {}: Expected '#maek', found '{}'.",
                 self.current_line, compiler.current_tok
@@ -417,6 +437,9 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
             std::process::exit(1);
         }
         compiler.current_tok = compiler.next_token();
+
+
+        
     }
 
     fn parse_title(&mut self, compiler: &mut LolcodeCompiler) {
@@ -467,11 +490,274 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         }
         compiler.current_tok = compiler.next_token();
 
-        // Consume all text until #TLDR
-        while !self.is_comment_end(&compiler.current_tok, &compiler.lexer) {
+       self.parse_text(compiler);
+
+
+        if !self.is_comment_end(&compiler.current_tok, &compiler.lexer) {
+            eprintln!(
+                "Syntax error at line {}: Expected comment end '#tldr', found '{}'.",
+                self.current_line, compiler.current_tok
+            );
+            std::process::exit(1);
+        }
+       
+    }
+
+    fn parse_body(&mut self, compiler: &mut LolcodeCompiler) {
+        // Parse body elements until we hit #KTHXBYE
+
+        if !self.is_document_end(&compiler.current_tok, &compiler.lexer) 
+        {
+            self.parse_inner_body(compiler); 
+            self.parse_body(compiler);
+
+        }
+       
+            
+    }
+
+    fn parse_inner_body(&mut self, compiler: &mut LolcodeCompiler) {
+
+        compiler.current_tok = compiler.next_token();
+        
+        if self.is_make_start(&compiler.current_tok, &compiler.lexer)
+        {
+            if self.is_paragraph_element(&compiler.current_tok, &compiler.lexer) 
+             {
+                self.parse_paragraph(compiler);
+            }
+            else if self.is_list_element(&compiler.current_tok, &compiler.lexer)
+            {
+                self.parse_list(compiler);
+            }
+            else 
+            {
+                eprintln!(
+                    "Syntax error at line {}: Expected 'paragraf' or 'list', found '{}'.",
+                    self.current_line, compiler.current_tok
+                );
+                std::process::exit(1);
+            }
+            return; 
+        }
+
+        else if self.is_gimmeh_start( &compiler.current_tok, &compiler.lexer)
+
+        {
+            compiler.current_tok = compiler.next_token(); 
+            if self.is_bold_element(&compiler.current_tok, &compiler.lexer)
+            {
+                compiler.current_tok = compiler.next_token(); 
+                self.parse_bold(compiler);
+                return;
+            } 
+            else if self.is_italics_element(&compiler.current_tok, &compiler.lexer)
+            {
+                compiler.current_tok = compiler.next_token(); 
+                self.parse_italics(compiler);
+                return;
+            }
+          
+          else if self.is_soundz_element(&compiler.current_tok, &compiler.lexer)
+          {
+            self.parse_audio(compiler);
+            return;
+          }
+          else if self.is_vidz_element(&compiler.current_tok, &compiler.lexer)
+          {
+            self.parse_video(compiler);
+            return;
+          }
+          else if self.is_newline_element(&compiler.current_tok, &compiler.lexer)
+          {
+            self.parse_newline(compiler);
+            return;
+          }
+          else {
+            eprintln!(
+                "Syntax error at line {}: Expected 'bold', 'italics', 'soundz', 'vidz' or 'newline', found '{}'.",
+                self.current_line, compiler.current_tok
+            );
+            std::process::exit(1);
+          }
+        }
+      
+       else if self.is_variable_start(&compiler.current_tok, &compiler.lexer)
+        {
+            self.parse_variable_define(compiler);
+        }
+
+        else if self.is_variable_end(&compiler.current_tok, &compiler.lexer)
+        {
+            self.parse_variable_use(compiler);
+        }
+
+        else if self.is_comment_start(&compiler.current_tok, &compiler.lexer)
+        {
+            self.parse_comment(compiler);
+            compiler.current_tok = compiler.next_token();
+        }
+
+        else if !compiler.current_tok.is_empty()
+        {
+            self.parse_text(compiler);
+        }
+    }
+    
+
+    fn parse_paragraph(&mut self, compiler: &mut LolcodeCompiler) {
+        // Already consumed #MAEK 
+
+        // PUSH NEW SCOPE when entering paragraph
+        compiler.push_scope();
+
+
+        // Expect PARAGRAF
+        if !self.is_paragraph_element(&compiler.current_tok, &compiler.lexer) {
+            eprintln!(
+                "Syntax error at line {}: Expected 'paragraf', found '{}'.",
+                self.current_line, compiler.current_tok
+            );
+            std::process::exit(1);
+        }
+        compiler.current_tok = compiler.next_token();
+
+        if self.is_variable_start(&compiler.current_tok, &compiler.lexer)
+        {
+            self.parse_variable_define(compiler);
+        }
+
+
+        self.parse_inner_paragraph(compiler);
+
+        // Consume #OIC
+        if !self.is_oic_end(&compiler.current_tok,&compiler.lexer)
+        {
+            eprintln!(
+                "Syntax error at line {}: Expected '#oic', found '{}'.",
+                self.current_line, compiler.current_tok
+            );
+            std::process::exit(1);
+        }
+        compiler.current_tok = compiler.next_token();
+
+        // POP SCOPE when exiting paragraph
+        compiler.pop_scope();
+    }
+
+    fn parse_inner_paragraph(&mut self, compiler: &mut LolcodeCompiler) {
+        while !self.is_oic_end(&compiler.current_tok, &compiler.lexer) && !compiler.current_tok.is_empty()
+        {
+            self.parse_inner_text(compiler);
+        }
+    }
+
+    fn parse_list(&mut self, compiler: &mut LolcodeCompiler) {
+        
+        if !self.is_make_start(&compiler.current_tok, &compiler.lexer)
+        {
+              eprintln!(
+                "Syntax error at line {}: Expected '#maek', found '{}'.",
+                self.current_line, compiler.current_tok
+            );
+            std::process::exit(1);
+        }
+        compiler.current_tok = compiler.next_token();
+
+         if !self.is_list_element(&compiler.current_tok, &compiler.lexer)
+        {
+              eprintln!(
+                "Syntax error at line {}: Expected 'list', found '{}'.",
+                self.current_line, compiler.current_tok
+            );
+            std::process::exit(1);
+        }
+        compiler.current_tok = compiler.next_token();
+
+        self.parse_list_items(compiler);
+
+        if !self.is_oic_end(&compiler.current_tok, &compiler.lexer) {
             if compiler.current_tok.is_empty() {
                 eprintln!(
-                    "Syntax error at line {}: Unexpected end of input in comment.",
+                    "Syntax error at line {}: Expected 'oic', found '{}'.",
+                    self.current_line, compiler.current_tok
+                );
+                std::process::exit(1);
+            }
+        }
+
+        // Consume #OIC
+        compiler.current_tok = compiler.next_token();
+    }
+
+    fn parse_list_items(&mut self, compiler: &mut LolcodeCompiler)
+    {
+        if !compiler.current_tok.is_empty()
+        {
+            self.parse_item(compiler);
+            self.parse_list_items(compiler);
+
+        }
+    }
+
+    fn parse_inner_text(&mut self, compiler: &mut LolcodeCompiler) {
+        if self.is_variable_end(&compiler.current_tok, &compiler.lexer)
+        {
+            self.parse_variable_use(compiler);
+        }
+        
+        else if self.is_gimmeh_start(&compiler.current_tok, &compiler.lexer){
+
+            compiler.current_tok = compiler.next_token();
+            if self.is_bold_element(&compiler.current_tok, &compiler.lexer)
+            {
+                compiler.current_tok = compiler.next_token(); 
+                self.parse_bold(compiler);
+            } 
+            else if self.is_italics_element(&compiler.current_tok, &compiler.lexer)
+            {
+                compiler.current_tok = compiler.next_token(); 
+                self.parse_italics(compiler);
+            }
+            else if self.is_newline_element(&compiler.current_tok, &compiler.lexer)
+            {
+                compiler.current_tok = compiler.next_token(); 
+                self.parse_newline(compiler);
+            }
+
+            else if self.is_soundz_element(&compiler.current_tok, &compiler.lexer)
+            {
+                self.parse_audio(compiler);
+            } 
+            else if self.is_vidz_element(&compiler.current_tok, &compiler.lexer)
+            {
+                self.parse_video(compiler);
+            }
+            else {
+                eprintln!(
+                    "Syntax error at line {}: Expected 'bold', 'italics' or 'newline', found '{}'.",
+                    self.current_line, compiler.current_tok
+                );
+                std::process::exit(1);
+            }
+        }
+
+        else if self.is_make_start(&compiler.current_tok, &compiler.lexer)
+        {
+            compiler.current_tok = compiler.next_token();
+            self.parse_list(compiler); 
+        }
+    
+        else if !compiler.current_tok.starts_with("#"){
+            self.parse_text(compiler);
+        }
+    }
+    fn parse_text(&mut self, compiler: &mut LolcodeCompiler) {
+        while !compiler.current_tok.starts_with("#") && !self.is_mkay_end(&compiler.current_tok, &compiler.lexer)
+        {  
+            if compiler.current_tok.is_empty() {
+                eprintln!(
+                    "Syntax error at line {}: Unexpected end of input in bold.",
                     self.current_line
                 );
                 std::process::exit(1);
@@ -479,213 +765,89 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
             compiler.current_tok = compiler.next_token();
         }
 
-        // Consume #TLDR
-        compiler.current_tok = compiler.next_token();
-    }
 
-    fn parse_body(&mut self, compiler: &mut LolcodeCompiler) {
-        // Parse body elements until we hit #KTHXBYE
-        while !self.is_document_end(&compiler.current_tok, &compiler.lexer) {
-            if compiler.current_tok.is_empty() {
-                eprintln!(
-                    "Syntax error at line {}: Unexpected end of input in body.",
-                    self.current_line
-                );
-                std::process::exit(1);
-            }
-
-            if self.is_make_start(&compiler.current_tok, &compiler.lexer) {
-                compiler.current_tok = compiler.next_token();
-
-                if self.is_paragraph_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_paragraph(compiler);
-                } else if self.is_list_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_list(compiler);
-                } else {
-                    eprintln!(
-                        "Syntax error at line {}: Unknown element after '#maek': '{}'.",
-                        self.current_line, compiler.current_tok
-                    );
-                    std::process::exit(1);
-                }
-            } else if self.is_gimmeh_start(&compiler.current_tok, &compiler.lexer) {
-                compiler.current_tok = compiler.next_token();
-
-                if self.is_newline_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_newline(compiler);
-                } 
-                else if self.is_bold_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_bold(compiler);
-                } else if self.is_italics_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_italics(compiler);
-                } else if self.is_soundz_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_audio(compiler);
-                } else if self.is_vidz_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_video(compiler);
-                } else {
-                    eprintln!(
-                        "Syntax error at line {}: Unknown element after '#gimmeh': '{}'.",
-                        self.current_line, compiler.current_tok
-                    );
-                    std::process::exit(1);
-                }
-            } else if self.is_variable_start(&compiler.current_tok, &compiler.lexer) {
-                self.parse_variable_declaration(compiler);
-            } else if self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
-                self.parse_variable_usage(compiler);
-            } else if self.is_comment_start(&compiler.current_tok, &compiler.lexer) {
-                self.parse_comment(compiler);
-            } else if self.is_text(&compiler.current_tok, &compiler.lexer) {
-                self.parse_text(compiler);
-            } else {
-                eprintln!(
-                    "Syntax error at line {}: Unexpected token in body: '{}'.",
-                    self.current_line, compiler.current_tok
-                );
-                std::process::exit(1);
-            }
-        }
-    }
-
-    fn parse_paragraph(&mut self, compiler: &mut LolcodeCompiler) {
-        // Already consumed #MAEK PARAGRAF
-        compiler.current_tok = compiler.next_token();
-
-        // PUSH NEW SCOPE when entering paragraph
-        compiler.push_scope();
-
-        // Parse paragraph content until #OIC
-        while !self.is_oic_end(&compiler.current_tok, &compiler.lexer) {
-            if compiler.current_tok.is_empty() {
-                eprintln!(
-                    "Syntax error at line {}: Unexpected end of input in paragraph.",
-                    self.current_line
-                );
-                std::process::exit(1);
-            }
-
-            if self.is_gimmeh_start(&compiler.current_tok, &compiler.lexer) {
-                compiler.current_tok = compiler.next_token();
-
-                if self.is_newline_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_newline(compiler);
-                } else if self.is_soundz_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_audio(compiler);
-                } else if self.is_vidz_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_video(compiler);
-                } else if self.is_bold_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_bold(compiler);
-                }else if self.is_italics_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_italics(compiler);
-                } 
-                else {
-                    eprintln!(
-                        "Syntax error at line {}: Unknown element after '#gimmeh': '{}'.",
-                        self.current_line, compiler.current_tok
-                    );
-                    std::process::exit(1);
-                }
-            } else if self.is_make_start(&compiler.current_tok, &compiler.lexer) {
-                compiler.current_tok = compiler.next_token();
-
-                if self.is_list_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_list(compiler);
-                } else {
-                    eprintln!(
-                        "Syntax error at line {}: Unknown element after '#maek': '{}'.",
-                        self.current_line, compiler.current_tok
-                    );
-                    std::process::exit(1);
-                }
-            } else if self.is_variable_start(&compiler.current_tok, &compiler.lexer) {
-                self.parse_variable_declaration(compiler);
-            } else if self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
-                self.parse_variable_usage(compiler);
-            } else if self.is_text(&compiler.current_tok, &compiler.lexer) {
-                self.parse_text(compiler);
-            } else {
-                eprintln!(
-                    "Syntax error at line {}: Unexpected token in paragraph: '{}'.",
-                    self.current_line, compiler.current_tok
-                );
-                std::process::exit(1);
-            }
-        }
-
-        // Consume #OIC
-        compiler.current_tok = compiler.next_token();
-
-        // POP SCOPE when exiting paragraph
-        compiler.pop_scope();
-    }
-
-    fn parse_list(&mut self, compiler: &mut LolcodeCompiler) {
-        // Already consumed #MAEK LIST
-        compiler.current_tok = compiler.next_token();
-
-        // Parse list items until #OIC
-        while !self.is_oic_end(&compiler.current_tok, &compiler.lexer) {
-            if compiler.current_tok.is_empty() {
-                eprintln!(
-                    "Syntax error at line {}: Unexpected end of input in list.",
-                    self.current_line
-                );
-                std::process::exit(1);
-            }
-
-            if self.is_gimmeh_start(&compiler.current_tok, &compiler.lexer) {
-                compiler.current_tok = compiler.next_token();
-
-                if self.is_item_element(&compiler.current_tok, &compiler.lexer) {
-                    self.parse_item(compiler);
-                } else {
-                    eprintln!(
-                        "Syntax error at line {}: Expected 'item' after '#gimmeh', found '{}'.",
-                        self.current_line, compiler.current_tok
-                    );
-                    std::process::exit(1);
-                }
-            } else {
-                eprintln!(
-                    "Syntax error at line {}: Expected '#gimmeh item' in list, found '{}'.",
-                    self.current_line, compiler.current_tok
-                );
-                std::process::exit(1);
-            }
-        }
-
-        // Consume #OIC
-        compiler.current_tok = compiler.next_token();
     }
 
     fn parse_item(&mut self, compiler: &mut LolcodeCompiler) {
-        // Already consumed #GIMMEH ITEM
-        compiler.current_tok = compiler.next_token();
 
-        // Parse item content until #MKAY
-        while !self.is_mkay_end(&compiler.current_tok, &compiler.lexer) {
-            if compiler.current_tok.is_empty() {
-                eprintln!(
-                    "Syntax error at line {}: Unexpected end of input in list item.",
-                    self.current_line
+          if !self.is_gimmeh_start(&compiler.current_tok, &compiler.lexer)
+        {
+            eprintln!(
+                    "Syntax error at line {}: expected #gimmeh found {}",
+                    self.current_line, compiler.current_tok
                 );
                 std::process::exit(1);
-            }
+        }
+        compiler.current_tok = compiler.next_token();
 
-            if self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
-                self.parse_variable_usage(compiler);
-            } else {
-                self.parse_text(compiler);
-            }
+  if !self.is_item_element(&compiler.current_tok, &compiler.lexer)
+        {
+            eprintln!(
+                    "Syntax error at line {}: expected #gimmeh found {}",
+                    self.current_line, compiler.current_tok
+                );
+                std::process::exit(1);
+        }
+        compiler.current_tok = compiler.next_token();
+
+        self.parse_inner_list(compiler); 
+        
+        if !self.is_mkay_end(&compiler.current_tok, &compiler.lexer)
+        {
+            eprintln!(
+                    "Syntax error at line {}: expected #mkay found {}",
+                    self.current_line, compiler.current_tok
+                );
+                std::process::exit(1);
         }
 
-        // Consume #MKAY
-        compiler.current_tok = compiler.next_token();
+    }
+
+    fn parse_inner_list(&mut self, compiler: &mut LolcodeCompiler)
+    {
+        if !compiler.current_tok.is_empty()
+        {
+            if self.is_gimmeh_start(&compiler.current_tok, &compiler.lexer)
+            {
+                compiler.current_tok = compiler.next_token();
+
+                if self.is_bold_element(&compiler.current_tok, &compiler.lexer)
+                {
+                    self.parse_bold(compiler);
+                } else if self.is_italics_element(&compiler.current_tok, &compiler.lexer)
+                {
+                    self.parse_italics(compiler);
+                }
+            }
+            self.parse_text(compiler);
+            self.parse_variable_use(compiler);
+        }
     }
 
     fn parse_audio(&mut self, compiler: &mut LolcodeCompiler) {
-        // Already consumed #GIMMEH SOUNDZ
-        compiler.current_tok = compiler.next_token();
+        
+        if !self.is_gimmeh_start(&compiler.current_tok, &compiler.lexer)
+        {
+            eprintln!(
+                "Syntax error at line {}: Expected '#gimmeh', found '{}'.",
+                self.current_line, compiler.current_tok
+            );
+            std::process::exit(1);
+        }
+
+        compiler.current_tok = compiler.next_token(); 
+
+
+        if !self.is_soundz_element(&compiler.current_tok, &compiler.lexer)
+        {
+            eprintln!(
+                "Syntax error at line {}: Expected 'soundz', found '{}'.",
+                self.current_line, compiler.current_tok
+            );
+            std::process::exit(1);
+        }
+
+        compiler.current_tok = compiler.next_token(); 
 
         // Expect address
         if !self.is_address(&compiler.current_tok, &compiler.lexer) {
@@ -709,13 +871,25 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
     }
 
     fn parse_video(&mut self, compiler: &mut LolcodeCompiler) {
-        // Already consumed #GIMMEH VIDZ
-        compiler.current_tok = compiler.next_token();
+
+        compiler.current_tok = compiler.next_token(); 
+
+
+        if !self.is_vidz_element(&compiler.current_tok, &compiler.lexer)
+        {
+            eprintln!(
+                "Syntax error at line {}: Expected 'vidz', found '{}'.",
+                self.current_line, compiler.current_tok
+            );
+            std::process::exit(1);
+        }
+
+        compiler.current_tok = compiler.next_token(); 
 
         // Expect address
         if !self.is_address(&compiler.current_tok, &compiler.lexer) {
             eprintln!(
-                "Syntax error at line {}: Expected address for video, found '{}'.",
+                "Syntax error at line {}: Expected address for audio, found '{}'.",
                 self.current_line, compiler.current_tok
             );
             std::process::exit(1);
@@ -725,7 +899,7 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         // Expect #MKAY
         if !self.is_mkay_end(&compiler.current_tok, &compiler.lexer) {
             eprintln!(
-                "Syntax error at line {}: Expected '#mkay' after video address, found '{}'.",
+                "Syntax error at line {}: Expected '#mkay' after audio address, found '{}'.",
                 self.current_line, compiler.current_tok
             );
             std::process::exit(1);
@@ -734,72 +908,73 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
     }
 
     fn parse_newline(&mut self, compiler: &mut LolcodeCompiler) {
-        // Already consumed #GIMMEH NEWLINE
+      
         compiler.current_tok = compiler.next_token();
+
+        if !self.is_newline_element(&compiler.current_tok, &compiler.lexer)
+        {
+            eprintln!(
+                "Syntax error at line {}: Expected 'newline', found '{}'.",
+                self.current_line, compiler.current_tok
+            );
+            std::process::exit(1);
+        }
     }
 
     fn parse_bold(&mut self, compiler: &mut LolcodeCompiler) {
-        // Already consumed #GIMMEH BOLD
-        compiler.current_tok = compiler.next_token();
+        // Already consumed #GIMMEH 
 
-        // Parse text until #MKAY
-        while !self.is_mkay_end(&compiler.current_tok, &compiler.lexer) {
-            if compiler.current_tok.is_empty() {
-                eprintln!(
-                    "Syntax error at line {}: Unexpected end of input in bold.",
-                    self.current_line
+
+
+        if !self.is_bold_element(&compiler.current_tok, &compiler.lexer)
+        {
+            eprintln!(
+                    "Syntax error at line {}: expected bold found {}",
+                    self.current_line, compiler.current_tok
                 );
                 std::process::exit(1);
-            }
+        }
+        compiler.current_tok = compiler.next_token();
+
+       
 
             if self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
-                self.parse_variable_usage(compiler);
+                self.parse_variable_use(compiler);
             } else {
                 self.parse_text(compiler);
             }
-        }
+        
 
         // Consume #MKAY
         compiler.current_tok = compiler.next_token();
     }
 
     fn parse_italics(&mut self, compiler: &mut LolcodeCompiler) {
-        // Already consumed #MAEK ITALICS
-        compiler.current_tok = compiler.next_token();
+        //Already consumed #GIMMEH
 
-        // Parse text until #OIC
-        while !self.is_mkay_end(&compiler.current_tok, &compiler.lexer) {
-            if compiler.current_tok.is_empty() {
-                eprintln!(
-                    "Syntax error at line {}: Unexpected end of input in italics.",
-                    self.current_line
+        if !self.is_italics_element(&compiler.current_tok, &compiler.lexer)
+        {
+            eprintln!(
+                    "Syntax error at line {}: expected italics found {}",
+                    self.current_line, compiler.current_tok
                 );
                 std::process::exit(1);
-            }
+        }
+        compiler.current_tok = compiler.next_token();
 
+        // Parse text until #MKAY
             if self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
-                self.parse_variable_usage(compiler);
+                self.parse_variable_use(compiler);
             } else {
                 self.parse_text(compiler);
             }
-        }
+        
 
-        // Consume #OIC
+        // Consume #MKAY
         compiler.current_tok = compiler.next_token();
     }
 
-    fn parse_text(&mut self, compiler: &mut LolcodeCompiler) {
-        if !self.is_text(&compiler.current_tok, &compiler.lexer) {
-            eprintln!(
-                "Syntax error at line {}: Expected text, found '{}'.",
-                self.current_line, compiler.current_tok
-            );
-            std::process::exit(1);
-        }
-        compiler.current_tok = compiler.next_token();
-    }
-
-    fn parse_variable_declaration(&mut self, compiler: &mut LolcodeCompiler) {
+    fn parse_variable_define(&mut self, compiler: &mut LolcodeCompiler) {
         // Expect #I HAZ
         if !self.is_variable_start(&compiler.current_tok, &compiler.lexer) {
             eprintln!(
@@ -885,7 +1060,7 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         compiler.declare_variable(var_name, var_value, self.current_line);
     }
 
-    fn parse_variable_usage(&mut self, compiler: &mut LolcodeCompiler) {
+    fn parse_variable_use(&mut self, compiler: &mut LolcodeCompiler) {
         // Expect #LEMME SEE
         if !self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
             eprintln!(
@@ -1422,10 +1597,100 @@ impl LolcodeCompiler {
                                                     continue;
                                                 }
                                             }
+               if token.to_lowercase() == "#gimmeh" {
+                                if let Some(para_elem_token) = token_strings.pop() {
+                                    if para_elem_token.to_lowercase() == "newline" {
+                                        html_string.push_str("\n<br/>\n");
+                                    }
+
+                                    if para_elem_token.to_lowercase() == "soundz" {
+                                        if let Some(address_token) = token_strings.pop() {
+                                            html_string.push_str(&format!(
+                                                "\n<audio controls>\n<source src=\"{}\" type=\"audio/mpeg\">",
+                                                address_token
+                                            ));
+                                        }
+
+                                        if let  Some(address_token) = token_strings.pop() {
+                                            if address_token.to_lowercase() == "#mkay" {
+                                                html_string.push_str("</audio>\n");
+                                            }
+                            
+                                        } 
+                                    }
+    
+                                    
+                                    if para_elem_token.to_lowercase() == "vidz" 
+                                    {
+                                        if let Some(address_token) = token_strings.pop() {
+                                            html_string.push_str(&format!(
+                                                "\n<iframe src = {}>\n",
+                                                address_token
+                                            ));
+                                        }
+
+                                        if let  Some(address_token) = token_strings.pop() {
+                                            if address_token.to_lowercase() == "#mkay" {
+                                                continue;
+                                            }
+                            
+                                        }
+                                    }
+                                    if para_elem_token.to_lowercase() == "bold" {
+                                        html_string.push_str(" <b>");
+                                        while let Some(bold_token) = token_strings.pop() {
+                                            if bold_token.to_lowercase() == "#lemme"
+                                            {
+                                                if let Some(variable_lemme) = token_strings.pop()
+                                                {
+                                                    if variable_lemme.to_lowercase() == "see"
+                                                    {
+                                                        if let Some(variable_name) = token_strings.pop()
+                                                        {
+                                                            let variable = scope_stack.last().unwrap(); 
+
+                                                            let value = variable.value.clone(); 
+                                                            html_string.push_str(" ");
+                                                            html_string.push_str(&value.unwrap());
+                                                        }
+                                                        
+                                                    }
+
+                                                    continue;
+                                                }
+                                            }
+
+                                            if bold_token.to_lowercase() == "#mkay" {
+                                                html_string.push_str(" </b>");
+                                                break;
+                                            }
+                                            html_string.push_str(" ");
+                                            html_string.push_str(&bold_token);
+                                        }
+                                    }
+
+                                    if para_elem_token.to_lowercase() == "italics" {
+                                        html_string.push_str(" <i>");
+                                        while let Some(bold_token) = token_strings.pop() {
+                                            if bold_token.to_lowercase() == "#mkay" {
+                                                html_string.push_str(" </i>");
+                                                break;
+                                            }
+                                            html_string.push_str(" ");
+                                            html_string.push_str(&bold_token);
+                                        }
+                                    }
+
+
+
+                                }
+
+                            }
                 else if !token.starts_with("#")
                 {
                     html_string.push_str(" ");
-                    html_string.push_str(&token);                }
+                    html_string.push_str(&token);               
+                }
                 else  {
                    continue;
                 }
@@ -1529,8 +1794,17 @@ pub fn open_html_in_chrome<P: AsRef<Path>>(html_file: P) -> io::Result<()> {
     // Convert to file:// URL
     let file_url = format!("file:///{}", clean_path.replace('\\', "/"));
     
-    println!("Opening in Chrome: {}", file_url);
     
+    // Try to find Chrome from registry
+    if let Some(chrome_path) = find_chrome_path() {
+        return Command::new(chrome_path)
+            .arg(&file_url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e));
+    }
+    
+    // Fallback to 'start chrome' command
     let status = Command::new("cmd")
         .args(&["/C", "start", "chrome", &file_url])
         .status()?;
@@ -1540,10 +1814,58 @@ pub fn open_html_in_chrome<P: AsRef<Path>>(html_file: P) -> io::Result<()> {
     } else {
         Err(io::Error::new(
             io::ErrorKind::Other,
-            format!("Chrome exited with status: {}", status),
+            "Could not find or launch Chrome",
         ))
     }
 }
+
+#[cfg(windows)]
+fn find_chrome_path() -> Option<String> {
+    // Registry keys where Chrome might be registered
+    let registry_paths = [
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+        r"SOFTWARE\Google\Chrome\BLBeacon",
+    ];
+    
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    
+    // Try each registry path
+    for reg_path in &registry_paths {
+        if let Ok(key) = hklm.open_subkey(reg_path) {
+            // Try to read the default value or "Path" value
+            if let Ok(path) = key.get_value::<String, _>("") {
+                if Path::new(&path).exists() {
+                    return Some(path);
+                }
+            }
+            
+            // Some keys store it in a "version" subkey
+            if let Ok(path) = key.get_value::<String, _>("Path") {
+                let chrome_exe = format!("{}\\chrome.exe", path);
+                if Path::new(&chrome_exe).exists() {
+                    return Some(chrome_exe);
+                }
+            }
+        }
+    }
+    
+    // Also try HKEY_CURRENT_USER
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    for reg_path in &registry_paths {
+        if let Ok(key) = hkcu.open_subkey(reg_path) {
+            if let Ok(path) = key.get_value::<String, _>("") {
+                if Path::new(&path).exists() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    
+    None
+}
+
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let config = Config::build(&args).unwrap_or_else(|err| {
@@ -1594,6 +1916,5 @@ let html_filename = file_path
 
     open_html_in_chrome(&html_filename); 
     
-    println!("This lolcode script is syntactically valid.");
-    println!("Static semantic analysis passed: All variables are properly defined before use.");
+   
 }
