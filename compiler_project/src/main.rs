@@ -1,4 +1,5 @@
 use regex::Regex;
+use std::arch::x86_64::CpuidResult;
 use std::collections::HashMap;
 use std::fs::{File, read_to_string};
 use std::{env, process, vec, io};
@@ -19,6 +20,8 @@ pub struct LolcodeCompiler {
 }
 
 #[derive(Clone)]
+#[derive(Debug)]
+
 struct VariableInfo {
     name: String,
     value: Option<String>,
@@ -139,7 +142,6 @@ impl LolcodeLexicalAnalyzer {
 
         // Reverse to get first token when popping
         self.tokens.reverse();
-        println!("{:?}", self.tokens); 
     }
 
     pub fn return_tokens(&mut self) {
@@ -382,17 +384,29 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         
             self.parse_comments(compiler);
     
+    println!("DEBUG: After comments, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
 
         // Allow variable declarations before head
         while self.is_variable_start(&compiler.current_tok, &compiler.lexer) {
-            self.parse_variable_define(compiler);
+println!("DEBUG: In while loop, current_tok = '{}' at line {}, is_variable_start = true", 
+                 compiler.current_tok, self.current_line);            
+                 self.parse_variable_define(compiler);
+                    println!("DEBUG: After parse_variable_define in loop, current_tok = '{}' at line {}", 
+                 compiler.current_tok, self.current_line);
+
         }
+
+
+    println!("DEBUG: Exited while loop, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
 
         self.parse_head(compiler);
         
         // Parse body (required)
         self.parse_body(compiler);
-    
+        
+
 }
 
     fn parse_comments(&mut self, compiler: &mut LolcodeCompiler) {
@@ -401,7 +415,6 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
             self.parse_comment(compiler);
         }
 
-        compiler.current_tok = compiler.next_token();
     }
 
     fn parse_head(&mut self, compiler: &mut LolcodeCompiler) {
@@ -480,177 +493,198 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
     }
 
     fn parse_comment(&mut self, compiler: &mut LolcodeCompiler) {
-        // Expect #OBTW
-        if !self.is_comment_start(&compiler.current_tok, &compiler.lexer) {
-            eprintln!(
-                "Syntax error at line {}: Expected comment start '#obtw', found '{}'.",
-                self.current_line, compiler.current_tok
-            );
-            std::process::exit(1);
-        }
-        compiler.current_tok = compiler.next_token();
-
-       self.parse_text(compiler);
-
-
-        if !self.is_comment_end(&compiler.current_tok, &compiler.lexer) {
-            eprintln!(
-                "Syntax error at line {}: Expected comment end '#tldr', found '{}'.",
-                self.current_line, compiler.current_tok
-            );
-            std::process::exit(1);
-        }
-       
+    println!("DEBUG: parse_comment START, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
+    
+    if !self.is_comment_start(&compiler.current_tok, &compiler.lexer) {
+        eprintln!(
+            "Syntax error at line {}: Expected comment start '#obtw', found '{}'.",
+            self.current_line, compiler.current_tok
+        );
+        std::process::exit(1);
     }
+    compiler.current_tok = compiler.next_token();
+    println!("DEBUG: After consuming #OBTW, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
+
+    self.parse_text(compiler);
+    println!("DEBUG: After parse_text, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
+
+    if !self.is_comment_end(&compiler.current_tok, &compiler.lexer) {
+        eprintln!(
+            "Syntax error at line {}: Expected comment end '#tldr', found '{}'.",
+            self.current_line, compiler.current_tok
+        );
+        std::process::exit(1);
+    }
+    
+    compiler.current_tok = compiler.next_token();
+    println!("DEBUG: parse_comment END, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
+}
 
     fn parse_body(&mut self, compiler: &mut LolcodeCompiler) {
         // Parse body elements until we hit #KTHXBYE
-
+            println!("DEBUG: parse_body, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
         if !self.is_document_end(&compiler.current_tok, &compiler.lexer) 
         {
             self.parse_inner_body(compiler); 
             self.parse_body(compiler);
 
         }
-       
             
     }
 
-    fn parse_inner_body(&mut self, compiler: &mut LolcodeCompiler) {
+   fn parse_inner_body(&mut self, compiler: &mut LolcodeCompiler) {
+    println!("DEBUG: parse_inner_body START, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
 
+    // Don't call next_token here - we already have the current token from parse_body
+    
+    if self.is_variable_start(&compiler.current_tok, &compiler.lexer) {
+        println!("DEBUG: parse_inner_body calling parse_variable_define");
+        self.parse_variable_define(compiler);
+        return;
+    }        
+    else if self.is_make_start(&compiler.current_tok, &compiler.lexer) {
+        // Consume #MAEK and get the block type
         compiler.current_tok = compiler.next_token();
         
-        if self.is_make_start(&compiler.current_tok, &compiler.lexer)
-        {
-            if self.is_paragraph_element(&compiler.current_tok, &compiler.lexer) 
-             {
-                self.parse_paragraph(compiler);
-            }
-            else if self.is_list_element(&compiler.current_tok, &compiler.lexer)
-            {
-                self.parse_list(compiler);
-            }
-            else 
-            {
-                eprintln!(
-                    "Syntax error at line {}: Expected 'paragraf' or 'list', found '{}'.",
-                    self.current_line, compiler.current_tok
-                );
-                std::process::exit(1);
-            }
-            return; 
+        println!("DEBUG: After consuming #MAEK, current_tok = '{}' at line {}", 
+                 compiler.current_tok, self.current_line);
+        
+        if self.is_paragraph_element(&compiler.current_tok, &compiler.lexer) {
+            println!("Parsing paragraph inside the inner body");
+            self.parse_paragraph(compiler);
         }
-
-        else if self.is_gimmeh_start( &compiler.current_tok, &compiler.lexer)
-
-        {
+        else if self.is_list_element(&compiler.current_tok, &compiler.lexer) {
+            self.parse_list(compiler);
+        }
+        else {
+            eprintln!(
+                "Syntax error at line {}: Expected 'paragraf' or 'list', found '{}'.",
+                self.current_line, compiler.current_tok
+            );
+            std::process::exit(1);
+        }
+        return; 
+    }
+    else if self.is_gimmeh_start(&compiler.current_tok, &compiler.lexer) {
+        compiler.current_tok = compiler.next_token(); 
+        if self.is_bold_element(&compiler.current_tok, &compiler.lexer) {
             compiler.current_tok = compiler.next_token(); 
-            if self.is_bold_element(&compiler.current_tok, &compiler.lexer)
-            {
-                compiler.current_tok = compiler.next_token(); 
-                self.parse_bold(compiler);
-                return;
-            } 
-            else if self.is_italics_element(&compiler.current_tok, &compiler.lexer)
-            {
-                compiler.current_tok = compiler.next_token(); 
-                self.parse_italics(compiler);
-                return;
-            }
-          
-          else if self.is_soundz_element(&compiler.current_tok, &compiler.lexer)
-          {
+            self.parse_bold(compiler);
+            return;
+        } 
+        else if self.is_italics_element(&compiler.current_tok, &compiler.lexer) {
+            compiler.current_tok = compiler.next_token(); 
+            self.parse_italics(compiler);
+            return;
+        }
+        else if self.is_soundz_element(&compiler.current_tok, &compiler.lexer) {
             self.parse_audio(compiler);
             return;
-          }
-          else if self.is_vidz_element(&compiler.current_tok, &compiler.lexer)
-          {
+        }
+        else if self.is_vidz_element(&compiler.current_tok, &compiler.lexer) {
             self.parse_video(compiler);
             return;
-          }
-          else if self.is_newline_element(&compiler.current_tok, &compiler.lexer)
-          {
+        }
+        else if self.is_newline_element(&compiler.current_tok, &compiler.lexer) {
             self.parse_newline(compiler);
             return;
-          }
-          else {
+        }
+        else {
             eprintln!(
                 "Syntax error at line {}: Expected 'bold', 'italics', 'soundz', 'vidz' or 'newline', found '{}'.",
                 self.current_line, compiler.current_tok
             );
             std::process::exit(1);
-          }
         }
-      
-       else if self.is_variable_start(&compiler.current_tok, &compiler.lexer)
-        {
-            self.parse_variable_define(compiler);
-        }
+    }
+    else if self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
+        self.parse_variable_use(compiler);
+    }
+    else if self.is_comment_start(&compiler.current_tok, &compiler.lexer) {
+        self.parse_comment(compiler);
+    }
+    else if !compiler.current_tok.is_empty() {
+        self.parse_text(compiler);
+    }
+}
 
-        else if self.is_variable_end(&compiler.current_tok, &compiler.lexer)
-        {
-            self.parse_variable_use(compiler);
-        }
+  fn parse_paragraph(&mut self, compiler: &mut LolcodeCompiler) {
+    println!("DEBUG: parse_paragraph called, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
 
-        else if self.is_comment_start(&compiler.current_tok, &compiler.lexer)
-        {
-            self.parse_comment(compiler);
-            compiler.current_tok = compiler.next_token();
-        }
+    // Already consumed #MAEK, current_tok is PARAGRAF
+    compiler.push_scope();
+    println!("DEBUG: Pushed scope in paragraph, depth now: {}", compiler.scope_stack.len());
 
-        else if !compiler.current_tok.is_empty()
-        {
-            self.parse_text(compiler);
-        }
+    // Verify we're on PARAGRAF
+    if !self.is_paragraph_element(&compiler.current_tok, &compiler.lexer) {
+        eprintln!(
+            "Syntax error at line {}: Expected 'paragraf', found '{}'.",
+            self.current_line, compiler.current_tok
+        );
+        std::process::exit(1);
     }
     
+    // Consume PARAGRAF and move to the paragraph content
+    compiler.current_tok = compiler.next_token();
+    println!("DEBUG: After consuming PARAGRAF, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
 
-    fn parse_paragraph(&mut self, compiler: &mut LolcodeCompiler) {
-        // Already consumed #MAEK 
-
-        // PUSH NEW SCOPE when entering paragraph
-        compiler.push_scope();
-
-
-        // Expect PARAGRAF
-        if !self.is_paragraph_element(&compiler.current_tok, &compiler.lexer) {
+    // Parse paragraph contents
+    while !self.is_oic_end(&compiler.current_tok, &compiler.lexer) {
+        if compiler.current_tok.is_empty() {
             eprintln!(
-                "Syntax error at line {}: Expected 'paragraf', found '{}'.",
-                self.current_line, compiler.current_tok
+                "Syntax error at line {}: Unexpected end of input in paragraph.",
+                self.current_line
             );
             std::process::exit(1);
         }
-        compiler.current_tok = compiler.next_token();
 
-        if self.is_variable_start(&compiler.current_tok, &compiler.lexer)
-        {
+        if self.is_variable_start(&compiler.current_tok, &compiler.lexer) {
+            println!("DEBUG: Calling parse_variable_define from paragraph");
             self.parse_variable_define(compiler);
+            // parse_variable_define already advances token, continue loop
         }
-
-
-        self.parse_inner_paragraph(compiler);
-
-        // Consume #OIC
-        if !self.is_oic_end(&compiler.current_tok,&compiler.lexer)
-        {
-            eprintln!(
-                "Syntax error at line {}: Expected '#oic', found '{}'.",
-                self.current_line, compiler.current_tok
-            );
-            std::process::exit(1);
+        else {
+            // Parse the content and advance
+            self.parse_inner_paragraph(compiler);
         }
+    }
+
+    // Consume #OIC
+    if !self.is_oic_end(&compiler.current_tok, &compiler.lexer) {
+        eprintln!(
+            "Syntax error at line {}: Expected '#oic', found '{}'.",
+            self.current_line, compiler.current_tok
+        );
+        std::process::exit(1);
+    }
+
+    println!("DEBUG: At end of paragraph, consuming #OIC");
+    compiler.current_tok = compiler.next_token();
+    
+    compiler.pop_scope();
+    println!("DEBUG: Popped scope, depth now: {}", compiler.scope_stack.len());
+}
+
+   fn parse_inner_paragraph(&mut self, compiler: &mut LolcodeCompiler) {
+    println!("DEBUG: parse_inner_paragraph, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
+    
+    // Parse one element of paragraph content
+    self.parse_inner_text(compiler);
+    
+    // Advance to next token
+    if !self.is_oic_end(&compiler.current_tok, &compiler.lexer) {
         compiler.current_tok = compiler.next_token();
-
-        // POP SCOPE when exiting paragraph
-        compiler.pop_scope();
     }
-
-    fn parse_inner_paragraph(&mut self, compiler: &mut LolcodeCompiler) {
-        while !self.is_oic_end(&compiler.current_tok, &compiler.lexer) && !compiler.current_tok.is_empty()
-        {
-            self.parse_inner_text(compiler);
-        }
-    }
+}
 
     fn parse_list(&mut self, compiler: &mut LolcodeCompiler) {
         
@@ -701,57 +735,46 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
     }
 
     fn parse_inner_text(&mut self, compiler: &mut LolcodeCompiler) {
-        if self.is_variable_end(&compiler.current_tok, &compiler.lexer)
-        {
-            self.parse_variable_use(compiler);
-        }
+    if self.is_variable_end(&compiler.current_tok, &compiler.lexer) {
+        self.parse_variable_use(compiler);
+    }
+    else if self.is_gimmeh_start(&compiler.current_tok, &compiler.lexer) {
+        compiler.current_tok = compiler.next_token();
         
-        else if self.is_gimmeh_start(&compiler.current_tok, &compiler.lexer){
-
-            compiler.current_tok = compiler.next_token();
-            if self.is_bold_element(&compiler.current_tok, &compiler.lexer)
-            {
-                compiler.current_tok = compiler.next_token(); 
-                self.parse_bold(compiler);
-            } 
-            else if self.is_italics_element(&compiler.current_tok, &compiler.lexer)
-            {
-                compiler.current_tok = compiler.next_token(); 
-                self.parse_italics(compiler);
-            }
-            else if self.is_newline_element(&compiler.current_tok, &compiler.lexer)
-            {
-                compiler.current_tok = compiler.next_token(); 
-                self.parse_newline(compiler);
-            }
-
-            else if self.is_soundz_element(&compiler.current_tok, &compiler.lexer)
-            {
-                self.parse_audio(compiler);
-            } 
-            else if self.is_vidz_element(&compiler.current_tok, &compiler.lexer)
-            {
-                self.parse_video(compiler);
-            }
-            else {
-                eprintln!(
-                    "Syntax error at line {}: Expected 'bold', 'italics' or 'newline', found '{}'.",
-                    self.current_line, compiler.current_tok
-                );
-                std::process::exit(1);
-            }
+        if self.is_bold_element(&compiler.current_tok, &compiler.lexer) {
+            // Don't call next_token here - parse_bold will handle it
+            self.parse_bold(compiler);
+        } 
+        else if self.is_italics_element(&compiler.current_tok, &compiler.lexer) {
+            // Don't call next_token here - parse_italics will handle it
+            self.parse_italics(compiler);
         }
-
-        else if self.is_make_start(&compiler.current_tok, &compiler.lexer)
-        {
-            compiler.current_tok = compiler.next_token();
-            self.parse_list(compiler); 
+        else if self.is_newline_element(&compiler.current_tok, &compiler.lexer) {
+            // Don't call next_token here - parse_newline will handle it
+            self.parse_newline(compiler);
         }
-    
-        else if !compiler.current_tok.starts_with("#"){
-            self.parse_text(compiler);
+        else if self.is_soundz_element(&compiler.current_tok, &compiler.lexer) {
+            self.parse_audio(compiler);
+        } 
+        else if self.is_vidz_element(&compiler.current_tok, &compiler.lexer) {
+            self.parse_video(compiler);
+        }
+        else {
+            eprintln!(
+                "Syntax error at line {}: Expected 'bold', 'italics', 'newline', 'soundz', or 'vidz', found '{}'.",
+                self.current_line, compiler.current_tok
+            );
+            std::process::exit(1);
         }
     }
+    else if self.is_make_start(&compiler.current_tok, &compiler.lexer) {
+        compiler.current_tok = compiler.next_token();
+        self.parse_list(compiler); 
+    }
+    else if !compiler.current_tok.starts_with("#") {
+        self.parse_text(compiler);
+    }
+}
     fn parse_text(&mut self, compiler: &mut LolcodeCompiler) {
         while !compiler.current_tok.starts_with("#") && !self.is_mkay_end(&compiler.current_tok, &compiler.lexer)
         {  
@@ -975,17 +998,14 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
     }
 
     fn parse_variable_define(&mut self, compiler: &mut LolcodeCompiler) {
-        // Expect #I HAZ
-        if !self.is_variable_start(&compiler.current_tok, &compiler.lexer) {
-            eprintln!(
-                "Syntax error at line {}: Expected '#i' or 'haz', found '{}'.",
-                self.current_line, compiler.current_tok
-            );
-            std::process::exit(1);
-        }
+        
+   println!("DEBUG: parse_variable_define called at line {}, current_tok = '{}'", 
+             self.current_line, compiler.current_tok);
 
         let var_keyword = compiler.current_tok.to_lowercase();
         compiler.current_tok = compiler.next_token();
+ println!("DEBUG: After consuming var keyword '{}', current_tok = '{}' at line {}", 
+             var_keyword, compiler.current_tok, self.current_line);
 
         // If we saw #I, expect HAZ
         if var_keyword == "#i" {
@@ -997,6 +1017,9 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
                 std::process::exit(1);
             }
             compiler.current_tok = compiler.next_token();
+                    println!("DEBUG: After consuming 'haz', current_tok = '{}' at line {}", 
+                 compiler.current_tok, self.current_line);
+
         }
 
         // Expect variable identifier
@@ -1009,7 +1032,12 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
         }
 
         let var_name = compiler.current_tok.clone();
+            println!("DEBUG: Variable name = '{}' at line {}", var_name, self.current_line);
+
         compiler.current_tok = compiler.next_token();
+  println!("DEBUG: After consuming var name, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
+
 
         // Check for #IT IZ (value assignment)
         let var_value = if self.is_variable_mid(&compiler.current_tok, &compiler.lexer) {
@@ -1057,7 +1085,11 @@ impl SyntaxAnalyzer for LolcodeSyntaxAnalyzer {
             None
         };
 
+    println!("DEBUG: About to declare variable '{}' at line {} (scope depth: {})", 
+             var_name, self.current_line, compiler.scope_stack.len());
         compiler.declare_variable(var_name, var_value, self.current_line);
+        println!("DEBUG: Finished parse_variable_define, current_tok = '{}' at line {}", 
+             compiler.current_tok, self.current_line);
     }
 
     fn parse_variable_use(&mut self, compiler: &mut LolcodeCompiler) {
@@ -1186,6 +1218,7 @@ impl LolcodeCompiler {
 
     fn push_scope(&mut self) {
         self.scope_stack.push(HashMap::new());
+
     }
 
     fn pop_scope(&mut self) {
@@ -1195,7 +1228,7 @@ impl LolcodeCompiler {
     }
 
     fn declare_variable(&mut self, name: String, value: Option<String>, line: usize) {
-        // Only check for redeclaration in the CURRENT scope
+       
         if let Some(current_scope) = self.scope_stack.last_mut() {
             if current_scope.contains_key(&name) {
                 let existing = &current_scope[&name];
@@ -1214,7 +1247,10 @@ impl LolcodeCompiler {
                     line_defined: line,
                 },
             );
+
         }
+            
+
     }
 
     fn lookup_variable(&self, name: &str) -> Option<&VariableInfo> {
